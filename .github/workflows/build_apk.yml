@@ -1,6 +1,13 @@
 name: Build Android APK (SP Smart)
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build_apk.yml'
+      - 'mobile/**'
+      - 'server/**'
   workflow_dispatch:
     inputs:
       build_type:
@@ -14,8 +21,10 @@ on:
 
 jobs:
   build_apk:
-    name: Compilar APK (${{ inputs.build_type }})
+    name: Compilar APK (${{ inputs.build_type || 'profile' }})
     runs-on: ubuntu-latest
+    env:
+      BUILD_TYPE: ${{ inputs.build_type || 'profile' }}
 
     defaults:
       run:
@@ -61,11 +70,11 @@ jobs:
         run: flutter test test/network/route_selection_test.dart
 
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
-        run: flutter build apk --${{ inputs.build_type }}
+        run: flutter build apk --${{ env.BUILD_TYPE }}
 
       - name: 📤 Upload do Artifact (APK Final)
         uses: actions/upload-artifact@v4
         with:
-          name: sp-smart-mobile-${{ inputs.build_type }}
-          path: mobile/build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
+          name: sp-smart-mobile-${{ env.BUILD_TYPE }}
+          path: mobile/build/app/outputs/flutter-apk/app-${{ env.BUILD_TYPE }}.apk
           retention-days: 7
