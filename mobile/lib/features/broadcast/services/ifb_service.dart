@@ -29,14 +29,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../../../core/network/signaling_service.dart';
 
-
 // ── Estado ────────────────────────────────────────────────────
 
 enum IFBState {
   idle,
-  requesting,    // Enviou CLIENT_IFB_REQUEST, aguardando SDP answer
-  connecting,    // ICE em progresso
-  connected,     // IFB ativo e áudio/vídeo fluindo
+  requesting, // Enviou CLIENT_IFB_REQUEST, aguardando SDP answer
+  connecting, // ICE em progresso
+  connected, // IFB ativo e áudio/vídeo fluindo
   error,
 }
 
@@ -58,12 +57,13 @@ class IFBStatus {
     String? errorMessage,
     bool? hasVideo,
     bool? hasAudio,
-  }) => IFBStatus(
-    state:        state        ?? this.state,
-    errorMessage: errorMessage ?? this.errorMessage,
-    hasVideo:     hasVideo     ?? this.hasVideo,
-    hasAudio:     hasAudio     ?? this.hasAudio,
-  );
+  }) =>
+      IFBStatus(
+        state: state ?? this.state,
+        errorMessage: errorMessage ?? this.errorMessage,
+        hasVideo: hasVideo ?? this.hasVideo,
+        hasAudio: hasAudio ?? this.hasAudio,
+      );
 
   static const initial = IFBStatus(state: IFBState.idle);
 }
@@ -97,22 +97,23 @@ class IFBService extends Notifier<IFBStatus> {
   /// Aplicadas no RTCPeerConnection para garantir que o áudio
   /// recebido do Studio preserve o estéreo L/R intacto.
   static Map<String, dynamic> get _audioRecvConstraints => {
-    'echoCancellation':  false,  // PROIBIDO — interfere com o sinal Mix-Minus
-    'noiseSuppression':  false,  // PROIBIDO — altera timbre do retorno
-    'autoGainControl':   false,  // PROIBIDO — muda nível do Mix-Minus
-    'channelCount':      2,      // ESTÉREO — L e R independentes
-    'sampleRate':        48000,  // Padrão Opus/broadcast
-    'sampleSize':        16,
-  };
+        'echoCancellation': false, // PROIBIDO — interfere com o sinal Mix-Minus
+        'noiseSuppression': false, // PROIBIDO — altera timbre do retorno
+        'autoGainControl': false, // PROIBIDO — muda nível do Mix-Minus
+        'channelCount': 2, // ESTÉREO — L e R independentes
+        'sampleRate': 48000, // Padrão Opus/broadcast
+        'sampleSize': 16,
+      };
 
   /// Configuração do RTCPeerConnection.
   static const Map<String, dynamic> _pcConfig = {
+    // Apenas STUN. TURN e credenciais de relay sao proibidos no IFB.
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
     ],
-    'sdpSemantics':          'unified-plan',
-    'iceCandidatePoolSize':  4,
+    'sdpSemantics': 'unified-plan',
+    'iceCandidatePoolSize': 4,
   };
 
   // ── API Pública ───────────────────────────────────────────
@@ -160,9 +161,9 @@ class IFBService extends Notifier<IFBStatus> {
   // ── PeerConnection ────────────────────────────────────────
 
   Future<void> _createPeerConnection(
-    String            reporterId,
-    SignalingService  signaling,
-    RTCVideoRenderer  remoteRenderer,
+    String reporterId,
+    SignalingService signaling,
+    RTCVideoRenderer remoteRenderer,
   ) async {
     // Cria o RTCPeerConnection com constraints de áudio explícitas
     _pc = await createPeerConnection(
@@ -182,6 +183,10 @@ class IFBService extends Notifier<IFBStatus> {
 
     // ── ICE candidate handler ───────────────────────────────
     _pc!.onIceCandidate = (RTCIceCandidate candidate) {
+      if (_isRelayCandidate(candidate.candidate)) {
+        debugPrint('[IFB] ICE relay local rejeitado (TURN proibido)');
+        return;
+      }
       if (_remoteDescSet) {
         // Envia imediatamente se já temos a remote description
         signaling.sendIceCandidate(reporterId, candidate, sessionType: 'ifb');
@@ -199,7 +204,8 @@ class IFBService extends Notifier<IFBStatus> {
           state = state.copyWith(state: IFBState.connected);
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
-          state = state.copyWith(state: IFBState.error, errorMessage: 'ICE failed');
+          state =
+              state.copyWith(state: IFBState.error, errorMessage: 'ICE failed');
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           state = state.copyWith(state: IFBState.idle);
@@ -239,7 +245,7 @@ class IFBService extends Notifier<IFBStatus> {
   }
 
   Future<void> _createAndSendOffer(
-    String           reporterId,
+    String reporterId,
     SignalingService signaling,
   ) async {
     // Cria o SDP offer com constraints de recvonly para A/V
@@ -266,26 +272,24 @@ class IFBService extends Notifier<IFBStatus> {
   // ── Signaling message listener ────────────────────────────
 
   void _listenForSignalingMessages(
-    String           reporterId,
+    String reporterId,
     SignalingService signaling,
   ) {
     _sigSub = signaling.ifbMessageStream.listen((msg) async {
       try {
         switch (msg['type'] as String?) {
-
           // SDP answer do Studio
           case 'SERVER_IFB_ANSWER':
             if (msg['reporterId'] != reporterId) return;
             final rawSdp = msg['sdpAnswer'] as String? ?? '';
 
             // Detecta se é realmente um answer ou um offer (push mode)
-            final sdpType = rawSdp.contains('a=group:') &&
-                            rawSdp.contains('o=')
+            final sdpType = rawSdp.contains('a=group:') && rawSdp.contains('o=')
                 ? 'answer'
                 : 'answer'; // Fase 3: sempre answer no flow normal
 
             final answer = RTCSessionDescription(
-              _enforceStereoInSdp(rawSdp),
+              _removeRelayCandidatesFromSdp(_enforceStereoInSdp(rawSdp)),
               sdpType,
             );
             await _pc!.setRemoteDescription(answer);
@@ -305,9 +309,14 @@ class IFBService extends Notifier<IFBStatus> {
             if (msg['reporterId'] != reporterId) return;
             final candObj = msg['candidate'] as Map<String, dynamic>?;
             if (candObj == null) return;
+            final candidateValue = candObj['candidate'] as String? ?? '';
+            if (_isRelayCandidate(candidateValue)) {
+              debugPrint('[IFB] ICE relay remoto rejeitado (TURN proibido)');
+              return;
+            }
             final candidate = RTCIceCandidate(
-              candObj['candidate']    as String? ?? '',
-              candObj['sdpMid']       as String?,
+              candidateValue,
+              candObj['sdpMid'] as String?,
               candObj['sdpMLineIndex'] as int?,
             );
             await _pc!.addCandidate(candidate);
@@ -322,7 +331,8 @@ class IFBService extends Notifier<IFBStatus> {
         }
       } catch (e) {
         debugPrint('[IFB] Signaling message error: $e');
-        state = state.copyWith(state: IFBState.error, errorMessage: e.toString());
+        state =
+            state.copyWith(state: IFBState.error, errorMessage: e.toString());
       }
     });
   }
@@ -356,8 +366,8 @@ class IFBService extends Notifier<IFBStatus> {
 
         // Remove parâmetros conflitantes e re-adiciona corretamente
         fmtp = fmtp
-          .replaceAll('stereo=0', 'stereo=1')
-          .replaceAll('sprop-stereo=0', 'sprop-stereo=1');
+            .replaceAll('stereo=0', 'stereo=1')
+            .replaceAll('sprop-stereo=0', 'sprop-stereo=1');
 
         if (!fmtp.contains('stereo=1')) {
           fmtp = fmtp.endsWith(line) ? '$fmtp;stereo=1' : '$fmtp;stereo=1';
@@ -381,6 +391,20 @@ class IFBService extends Notifier<IFBStatus> {
     return modified;
   }
 
+  static bool _isRelayCandidate(String? candidate) {
+    return candidate?.toLowerCase().contains(' typ relay') == true;
+  }
+
+  /// Remove candidatos TURN que eventualmente venham embutidos no SDP remoto.
+  /// Permanecem somente host e server-reflexive (STUN).
+  String _removeRelayCandidatesFromSdp(String sdp) {
+    return sdp
+        .split('\r\n')
+        .where((line) =>
+            !line.startsWith('a=candidate:') || !_isRelayCandidate(line))
+        .join('\r\n');
+  }
+
   /// Garante que o audio track recebido não seja processado pelo
   /// sistema de conferência do WebRTC nativo (no-op em algumas plataformas,
   /// mas boa prática de segurança).
@@ -397,5 +421,5 @@ class IFBService extends Notifier<IFBStatus> {
   }
 }
 
-final iFBServiceProvider = NotifierProvider<IFBService, IFBStatus>(IFBService.new);
-
+final iFBServiceProvider =
+    NotifierProvider<IFBService, IFBStatus>(IFBService.new);

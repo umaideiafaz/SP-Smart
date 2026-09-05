@@ -50,6 +50,9 @@ jobs:
       - name: 🔎 Validar código Dart
         run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
+      - name: 🧪 Testar corrida de rota
+        run: flutter test test/network/route_selection_test.dart
+
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
         run: flutter build apk --${{ inputs.build_type }}
 

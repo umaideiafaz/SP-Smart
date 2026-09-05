@@ -72,6 +72,8 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         val host      = call.argument<String>("host") ?: return result.error("INVALID_ARG", "host required", null)
         val port      = call.argument<Int>("port") ?: 8890
         val streamKey = call.argument<String>("streamKey") ?: ""
+        val passphrase = call.argument<String>("passphrase")
+            ?: return result.error("INVALID_ARG", "passphrase required", null)
         val latencyMs = call.argument<Int>("latencyMs") ?: 120
         val node      = call.argument<String>("node") ?: "primary"
 
@@ -80,7 +82,9 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         currentStreamKey = streamKey
         currentNode = node
 
-        val success = publisher?.startPipeline(host, port, streamKey, latencyMs, node) == true
+        val success = publisher?.startPipeline(
+            host, port, streamKey, passphrase, latencyMs, node
+        ) == true
         
         if (success) {
             // Emite que estamos conectando (o C++ emitirá streaming depois)
@@ -96,13 +100,17 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         val newHost      = call.argument<String>("host") ?: return result.error("INVALID_ARG", "host required", null)
         val newPort      = call.argument<Int>("port") ?: 8890
         val newStreamKey = call.argument<String>("streamKey") ?: ""
+        val passphrase   = call.argument<String>("passphrase")
+            ?: return result.error("INVALID_ARG", "passphrase required", null)
         val latencyMs    = call.argument<Int>("latencyMs") ?: 120
         val newNode      = call.argument<String>("node") ?: "backup"
 
         sendEvent(mapOf("event" to "state_changed", "state" to "switching"))
 
         // Chama JNI para hot-swap lock-free
-        val success = publisher?.nativeSwitchDestination(newHost, newPort, newStreamKey, latencyMs, newNode) == true
+        val success = publisher?.nativeSwitchDestination(
+            newHost, newPort, newStreamKey, passphrase, latencyMs, newNode
+        ) == true
 
         if (success) {
             currentHost = newHost

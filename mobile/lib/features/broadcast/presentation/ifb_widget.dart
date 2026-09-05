@@ -48,7 +48,7 @@ class _IFBWidgetState extends ConsumerState<IFBWidget> {
   Widget build(BuildContext context) {
     final ifbStatus = ref.watch(iFBServiceProvider);
     final ifbNotifier = ref.read(iFBServiceProvider.notifier);
-    final signaling  = ref.read(signalingServiceProvider);
+    final signaling = ref.read(signalingServiceProvider);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -62,25 +62,24 @@ class _IFBWidgetState extends ConsumerState<IFBWidget> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-
           // ── Vídeo de Retorno ────────────────────────────────
           _VideoReturnView(
-            renderer:  _renderer,
+            renderer: _renderer,
             ifbStatus: ifbStatus,
           ),
 
           // ── Barra de Status e Controles ─────────────────────
           _IFBControlBar(
             reporterId: widget.reporterId,
-            ifbStatus:  ifbStatus,
+            ifbStatus: ifbStatus,
             onRequest: () => ifbNotifier.requestIFB(
-              reporterId:     widget.reporterId,
-              signaling:      signaling!,
+              reporterId: widget.reporterId,
+              signaling: signaling!,
               remoteRenderer: _renderer,
             ),
             onHangup: () => ifbNotifier.hangup(
               reporterId: widget.reporterId,
-              signaling:  signaling!,
+              signaling: signaling!,
             ),
           ),
         ],
@@ -97,7 +96,7 @@ class _VideoReturnView extends StatelessWidget {
   const _VideoReturnView({required this.renderer, required this.ifbStatus});
 
   final RTCVideoRenderer renderer;
-  final IFBStatus        ifbStatus;
+  final IFBStatus ifbStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -110,7 +109,6 @@ class _VideoReturnView extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-
             // Vídeo WebRTC
             if (ifbStatus.state == IFBState.connected && ifbStatus.hasVideo)
               RTCVideoView(
@@ -127,7 +125,8 @@ class _VideoReturnView extends StatelessWidget {
                 top: 8,
                 left: 8,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                   decoration: BoxDecoration(
                     color: Colors.black54,
                     borderRadius: BorderRadius.circular(4),
@@ -171,7 +170,7 @@ class _VideoPlaceholder extends StatelessWidget {
             Text(
               _labelForState(state),
               style: TextStyle(
-                color:    _colorForState(state),
+                color: _colorForState(state),
                 fontSize: 11,
                 fontWeight: FontWeight.w500,
               ),
@@ -183,28 +182,28 @@ class _VideoPlaceholder extends StatelessWidget {
   }
 
   IconData _iconForState(IFBState s) => switch (s) {
-    IFBState.idle       => Icons.headset_off,
-    IFBState.requesting => Icons.sync,
-    IFBState.connecting => Icons.wifi_find,
-    IFBState.connected  => Icons.play_circle_outline,
-    IFBState.error      => Icons.error_outline,
-  };
+        IFBState.idle => Icons.headset_off,
+        IFBState.requesting => Icons.sync,
+        IFBState.connecting => Icons.wifi_find,
+        IFBState.connected => Icons.play_circle_outline,
+        IFBState.error => Icons.error_outline,
+      };
 
   Color _colorForState(IFBState s) => switch (s) {
-    IFBState.idle       => Colors.white24,
-    IFBState.requesting => Colors.yellow.shade700,
-    IFBState.connecting => Colors.orange.shade400,
-    IFBState.connected  => const Color(0xFF00BCD4),
-    IFBState.error      => Colors.red.shade400,
-  };
+        IFBState.idle => Colors.white24,
+        IFBState.requesting => Colors.yellow.shade700,
+        IFBState.connecting => Colors.orange.shade400,
+        IFBState.connected => const Color(0xFF00BCD4),
+        IFBState.error => Colors.red.shade400,
+      };
 
   String _labelForState(IFBState s) => switch (s) {
-    IFBState.idle       => 'IFB inativo',
-    IFBState.requesting => 'Negociando WebRTC...',
-    IFBState.connecting => 'Conectando (ICE)...',
-    IFBState.connected  => 'Aguardando vídeo',
-    IFBState.error      => 'Erro na conexão',
-  };
+        IFBState.idle => 'IFB inativo',
+        IFBState.requesting => 'Negociando WebRTC...',
+        IFBState.connecting => 'Conectando (ICE)...',
+        IFBState.connected => 'Aguardando vídeo',
+        IFBState.error => 'Erro na conexão',
+      };
 }
 
 class _IFBControlBar extends StatelessWidget {
@@ -215,39 +214,45 @@ class _IFBControlBar extends StatelessWidget {
     required this.onHangup,
   });
 
-  final String     reporterId;
-  final IFBStatus  ifbStatus;
+  final String reporterId;
+  final IFBStatus ifbStatus;
   final VoidCallback onRequest;
   final VoidCallback onHangup;
 
   @override
   Widget build(BuildContext context) {
-    final isActive = ifbStatus.state == IFBState.connected
-                  || ifbStatus.state == IFBState.connecting;
-    final isLoading = ifbStatus.state == IFBState.requesting
-                   || ifbStatus.state == IFBState.connecting;
+    final isActive = ifbStatus.state == IFBState.connected ||
+        ifbStatus.state == IFBState.connecting;
+    final isLoading = ifbStatus.state == IFBState.requesting ||
+        ifbStatus.state == IFBState.connecting;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-
           // ── Canal L/R info ──────────────────────────────────
           if (isActive)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
                 children: [
-                  _ChannelChip(label: 'L', desc: 'PGM + Dir. Jornalismo', color: Colors.blue.shade300),
+                  _ChannelChip(
+                      label: 'L',
+                      desc: 'PGM + Dir. Jornalismo',
+                      color: Colors.blue.shade300),
                   const SizedBox(width: 8),
-                  _ChannelChip(label: 'R', desc: 'PGM + Dir. TV',         color: Colors.green.shade300),
+                  _ChannelChip(
+                      label: 'R',
+                      desc: 'PGM + Dir. TV',
+                      color: Colors.green.shade300),
                 ],
               ),
             ),
 
           // ── Error message ───────────────────────────────────
-          if (ifbStatus.state == IFBState.error && ifbStatus.errorMessage != null)
+          if (ifbStatus.state == IFBState.error &&
+              ifbStatus.errorMessage != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
@@ -260,31 +265,33 @@ class _IFBControlBar extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: isActive || isLoading
-              ? OutlinedButton.icon(
-                  onPressed: isLoading ? null : onHangup,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.red.shade400,
-                    side: BorderSide(color: Colors.red.shade900),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+                ? OutlinedButton.icon(
+                    onPressed: isLoading ? null : onHangup,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red.shade400,
+                      side: BorderSide(color: Colors.red.shade900),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    icon: isLoading
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white38),
+                          )
+                        : const Icon(Icons.headset_off, size: 16),
+                    label: Text(isLoading ? 'Conectando...' : 'Desligar IFB'),
+                  )
+                : FilledButton.icon(
+                    onPressed: onRequest,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF006064),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                    icon: const Icon(Icons.headset, size: 16),
+                    label: const Text('Ativar IFB'),
                   ),
-                  icon: isLoading
-                    ? const SizedBox(
-                        width: 14, height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white38),
-                      )
-                    : const Icon(Icons.headset_off, size: 16),
-                  label: Text(isLoading ? 'Conectando...' : 'Desligar IFB'),
-                )
-              : FilledButton.icon(
-                  onPressed: onRequest,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF006064),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                  ),
-                  icon: const Icon(Icons.headset, size: 16),
-                  label: const Text('Ativar IFB'),
-                ),
           ),
         ],
       ),
@@ -293,11 +300,12 @@ class _IFBControlBar extends StatelessWidget {
 }
 
 class _ChannelChip extends StatelessWidget {
-  const _ChannelChip({required this.label, required this.desc, required this.color});
+  const _ChannelChip(
+      {required this.label, required this.desc, required this.color});
 
   final String label;
   final String desc;
-  final Color  color;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -311,9 +319,12 @@ class _ChannelChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w800)),
+          Text(label,
+              style: TextStyle(
+                  color: color, fontSize: 10, fontWeight: FontWeight.w800)),
           const SizedBox(width: 4),
-          Text(desc,  style: TextStyle(color: color.withAlpha(200), fontSize: 9)),
+          Text(desc,
+              style: TextStyle(color: color.withAlpha(200), fontSize: 9)),
         ],
       ),
     );

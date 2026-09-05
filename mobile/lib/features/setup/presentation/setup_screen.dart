@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sp_smart/core/config/app_config.dart';
+import 'package:sp_smart/core/network/signaling_service.dart';
 import 'package:sp_smart/core/router/app_router.dart';
 
 /// Setup Screen
@@ -30,6 +31,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   bool _backupEnabled = false;
   bool _controllersInitialized = false;
+  bool _isConnecting = false;
 
   @override
   void dispose() {
@@ -46,15 +48,19 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
   void _initControllers(AppConfig config) {
     if (_controllersInitialized) return;
-    _nameCtrl          = TextEditingController(text: config.displayName);
-    _secretCtrl        = TextEditingController(text: config.authSecret);
-    _primaryHostCtrl   = TextEditingController(text: config.primary.host);
-    _primaryPortCtrl   = TextEditingController(text: config.primary.signalingPort.toString());
-    _primarySrtPortCtrl = TextEditingController(text: config.primary.srtPort.toString());
-    _backupHostCtrl    = TextEditingController(text: config.backup?.host ?? '');
-    _backupPortCtrl    = TextEditingController(text: (config.backup?.signalingPort ?? 3000).toString());
-    _backupSrtPortCtrl = TextEditingController(text: (config.backup?.srtPort ?? 8890).toString());
-    _backupEnabled     = config.backupEnabled;
+    _nameCtrl = TextEditingController(text: config.displayName);
+    _secretCtrl = TextEditingController(text: config.authSecret);
+    _primaryHostCtrl = TextEditingController(text: config.primary.host);
+    _primaryPortCtrl =
+        TextEditingController(text: config.primary.signalingPort.toString());
+    _primarySrtPortCtrl =
+        TextEditingController(text: config.primary.srtPort.toString());
+    _backupHostCtrl = TextEditingController(text: config.backup?.host ?? '');
+    _backupPortCtrl = TextEditingController(
+        text: (config.backup?.signalingPort ?? 3000).toString());
+    _backupSrtPortCtrl = TextEditingController(
+        text: (config.backup?.srtPort ?? 8890).toString());
+    _backupEnabled = config.backupEnabled;
     _controllersInitialized = true;
   }
 
@@ -63,8 +69,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final configAsync = ref.watch(appConfigNotifierProvider);
 
     return configAsync.when(
-      loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
-      error: (e, _) => Scaffold(body: Center(child: Text('Erro de config: $e'))),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
+      error: (e, _) =>
+          Scaffold(body: Center(child: Text('Erro de config: $e'))),
       data: (config) {
         _initControllers(config);
         return Scaffold(
@@ -86,10 +94,16 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                         ),
                   ),
                   const SizedBox(height: 12),
-                  _field(_nameCtrl,   'Nome do Repórter',   required: true),
+                  _field(_nameCtrl, 'Nome do Repórter', required: true),
                   const SizedBox(height: 8),
-                  _field(_secretCtrl, 'Auth Secret',        obscure: true,
-                      validator: (v) => (v == null || v.length < 8) ? 'Mínimo 8 caracteres' : null),
+                  _field(_secretCtrl, 'Auth Secret', obscure: true,
+                      validator: (v) {
+                    final length = v?.trim().length ?? 0;
+                    if (length < 10 || length > 79) {
+                      return 'Use entre 10 e 79 caracteres (SRT)';
+                    }
+                    return null;
+                  }),
 
                   const SizedBox(height: 28),
 
@@ -97,8 +111,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   _SectionLabel('Servidor Principal (Primary)'),
                   const SizedBox(height: 12),
                   _ServerFields(
-                    hostCtrl:   _primaryHostCtrl,
-                    portCtrl:   _primaryPortCtrl,
+                    hostCtrl: _primaryHostCtrl,
+                    portCtrl: _primaryPortCtrl,
                     srtPortCtrl: _primarySrtPortCtrl,
                   ),
 
@@ -131,11 +145,11 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                               ),
                               const SizedBox(height: 12),
                               _ServerFields(
-                                hostCtrl:    _backupHostCtrl,
-                                portCtrl:    _backupPortCtrl,
+                                hostCtrl: _backupHostCtrl,
+                                portCtrl: _backupPortCtrl,
                                 srtPortCtrl: _backupSrtPortCtrl,
-                                hostHint:    'ex: 192.168.1.110 ou 10.0.0.5',
-                                required:    _backupEnabled,
+                                hostHint: 'ex: 192.168.1.110 ou 10.0.0.5',
+                                required: _backupEnabled,
                               ),
                             ],
                           )
@@ -145,8 +159,13 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   const SizedBox(height: 40),
 
                   FilledButton(
-                    onPressed: _onSave,
-                    child: const Text('Salvar e Conectar'),
+                    onPressed: _isConnecting ? null : _onSave,
+                    child: _isConnecting
+                        ? const SizedBox.square(
+                            dimension: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Salvar e Conectar'),
                   ),
                 ],
               ),
@@ -166,26 +185,53 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
     final updated = config.copyWith(
       displayName: _nameCtrl.text.trim(),
-      authSecret:  _secretCtrl.text.trim(),
+      authSecret: _secretCtrl.text.trim(),
       primary: ServerEndpoint(
-        host:           _primaryHostCtrl.text.trim(),
-        signalingPort:  int.tryParse(_primaryPortCtrl.text.trim()) ?? 3000,
-        srtPort:        int.tryParse(_primarySrtPortCtrl.text.trim()) ?? 8890,
-        isPrimary:      true,
+        host: _primaryHostCtrl.text.trim(),
+        signalingPort: int.tryParse(_primaryPortCtrl.text.trim()) ?? 3000,
+        srtPort: int.tryParse(_primarySrtPortCtrl.text.trim()) ?? 8890,
+        isPrimary: true,
       ),
       backup: _backupEnabled && _backupHostCtrl.text.trim().isNotEmpty
           ? ServerEndpoint(
-              host:          _backupHostCtrl.text.trim(),
+              host: _backupHostCtrl.text.trim(),
               signalingPort: int.tryParse(_backupPortCtrl.text.trim()) ?? 3000,
-              srtPort:       int.tryParse(_backupSrtPortCtrl.text.trim()) ?? 8890,
-              isPrimary:     false,
+              srtPort: int.tryParse(_backupSrtPortCtrl.text.trim()) ?? 8890,
+              isPrimary: false,
             )
           : null,
       backupEnabled: _backupEnabled,
     );
 
-    await ref.read(appConfigNotifierProvider.notifier).save(updated);
-    if (mounted) context.go(Routes.broadcast);
+    setState(() => _isConnecting = true);
+    try {
+      await ref.read(appConfigNotifierProvider.notifier).save(updated);
+
+      final selection = await ref.read(signalingServiceProvider).connect(
+            endpoints: updated.endpoints,
+            reporterId: updated.reporterId,
+            displayName: updated.displayName,
+            authSecret: updated.authSecret,
+            srtStreamKey: updated.srtStreamKey,
+          );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          'Rota: ${selection.endpoint.label} '
+          '(${selection.endpoint.host}) — RTT ${selection.rtt.inMilliseconds} ms',
+        ),
+      ));
+      context.go(Routes.broadcast);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Falha ao conectar: $error'),
+        backgroundColor: Theme.of(context).colorScheme.error,
+      ));
+    } finally {
+      if (mounted) setState(() => _isConnecting = false);
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────
@@ -193,7 +239,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     TextEditingController ctrl,
     String label, {
     bool required = false,
-    bool obscure  = false,
+    bool obscure = false,
     String? Function(String?)? validator,
   }) {
     return TextFormField(

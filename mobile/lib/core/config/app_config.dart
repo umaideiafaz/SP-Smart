@@ -1,26 +1,27 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-
 
 // ── Constants ──────────────────────────────────────────────────
 const _kWsPath = '/ws';
 const _kDefaultSrtPort = 8890;
 
 // ── SharedPreferences keys ────────────────────────────────────
-const _kReporterIdKey        = 'reporter_id';
-const _kDisplayNameKey       = 'display_name';
-const _kAuthSecretKey        = 'auth_secret';
-const _kSrtStreamKeyKey      = 'srt_stream_key';
+const _kReporterIdKey = 'reporter_id';
+const _kDisplayNameKey = 'display_name';
+const _kAuthSecretKey = 'auth_secret';
+const _kSrtStreamKeyKey = 'srt_stream_key';
 // Primary node
-const _kPrimaryHostKey       = 'primary_host';
-const _kPrimaryPortKey       = 'primary_port';
-const _kPrimarySrtPortKey    = 'primary_srt_port';
+const _kPrimaryHostKey = 'primary_host';
+const _kPrimaryPortKey = 'primary_port';
+const _kPrimarySrtPortKey = 'primary_srt_port';
 // Backup / secondary node
-const _kBackupHostKey        = 'backup_host';
-const _kBackupPortKey        = 'backup_port';
-const _kBackupSrtPortKey     = 'backup_srt_port';
-const _kBackupEnabledKey     = 'backup_enabled';
+const _kBackupHostKey = 'backup_host';
+const _kBackupPortKey = 'backup_port';
+const _kBackupSrtPortKey = 'backup_srt_port';
+const _kBackupEnabledKey = 'backup_enabled';
 
 // ── Server Endpoint ───────────────────────────────────────────
 
@@ -39,7 +40,17 @@ class ServerEndpoint {
   });
 
   /// WebSocket URL for the signaling connection.
-  String get wsUrl => 'ws://$host:$signalingPort$_kWsPath';
+  ///
+  /// Enderecos IP sao usados diretamente na rede privada (ws). Hostnames usam
+  /// TLS (wss), onde o certificado pode ser validado contra o dominio.
+  Uri get wsUri => Uri(
+        scheme: InternetAddress.tryParse(host) == null ? 'wss' : 'ws',
+        host: host,
+        port: signalingPort,
+        path: _kWsPath,
+      );
+
+  String get wsUrl => wsUri.toString();
 
   /// Base SRT ingest URL (stream key appended by SrtEngine).
   String get srtBaseUrl => 'srt://$host:$srtPort';
@@ -182,5 +193,5 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
   }
 }
 
-final appConfigNotifierProvider = AsyncNotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);
-
+final appConfigNotifierProvider =
+    AsyncNotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);

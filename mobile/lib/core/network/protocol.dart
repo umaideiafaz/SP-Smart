@@ -19,29 +19,29 @@ enum EncodingPreset {
 
 extension EncodingPresetExtension on EncodingPreset {
   String toJson() => switch (this) {
-        EncodingPreset.lowLatencySd   => 'LOW_LATENCY_SD',
-        EncodingPreset.lowLatencyHd   => 'LOW_LATENCY_HD',
-        EncodingPreset.qualityHd      => 'QUALITY_HD',
-        EncodingPreset.qualityFhd     => 'QUALITY_FHD',
+        EncodingPreset.lowLatencySd => 'LOW_LATENCY_SD',
+        EncodingPreset.lowLatencyHd => 'LOW_LATENCY_HD',
+        EncodingPreset.qualityHd => 'QUALITY_HD',
+        EncodingPreset.qualityFhd => 'QUALITY_FHD',
         EncodingPreset.qualityFhdHigh => 'QUALITY_FHD_HIGH',
       };
 
   static EncodingPreset fromJson(String value) => switch (value) {
-        'LOW_LATENCY_SD'   => EncodingPreset.lowLatencySd,
-        'LOW_LATENCY_HD'   => EncodingPreset.lowLatencyHd,
-        'QUALITY_HD'       => EncodingPreset.qualityHd,
-        'QUALITY_FHD'      => EncodingPreset.qualityFhd,
+        'LOW_LATENCY_SD' => EncodingPreset.lowLatencySd,
+        'LOW_LATENCY_HD' => EncodingPreset.lowLatencyHd,
+        'QUALITY_HD' => EncodingPreset.qualityHd,
+        'QUALITY_FHD' => EncodingPreset.qualityFhd,
         'QUALITY_FHD_HIGH' => EncodingPreset.qualityFhdHigh,
-        _                  => EncodingPreset.lowLatencyHd,
+        _ => EncodingPreset.lowLatencyHd,
       };
 }
 
 extension TallyStateExtension on TallyState {
   String toJson() => name.toUpperCase();
   static TallyState fromJson(String value) => switch (value) {
-        'PGM'  => TallyState.pgm,
-        'PVW'  => TallyState.pvw,
-        _      => TallyState.idle,
+        'PGM' => TallyState.pgm,
+        'PVW' => TallyState.pvw,
+        _ => TallyState.idle,
       };
 }
 
@@ -134,7 +134,8 @@ class ClientStatusMessage {
 class ClientPongMessage {
   final int timestamp;
   const ClientPongMessage({required this.timestamp});
-  Map<String, dynamic> toJson() => {'type': 'CLIENT_PONG', 'timestamp': timestamp};
+  Map<String, dynamic> toJson() =>
+      {'type': 'CLIENT_PONG', 'timestamp': timestamp};
 }
 
 class ClientByeMessage {
@@ -155,16 +156,16 @@ sealed class ServerMessage {
 
   factory ServerMessage.fromJson(Map<String, dynamic> json) {
     return switch (json['type'] as String?) {
-      'SERVER_WELCOME'      => ServerWelcomeMessage.fromJson(json),
-      'SERVER_REJECT'       => ServerRejectMessage.fromJson(json),
-      'SERVER_TALLY'        => ServerTallyMessage.fromJson(json),
-      'SERVER_BITRATE_CMD'  => ServerBitrateCommandMessage.fromJson(json),
-      'SERVER_IFB_ANSWER'   => ServerIFBAnswerMessage.fromJson(json),
-      'SERVER_ICE_CANDIDATE'=> ServerICECandidateMessage.fromJson(json),
-      'SERVER_IFB_HANGUP'   => ServerIFBHangupMessage.fromJson(json),
-      'SERVER_ERROR'        => ServerErrorMessage.fromJson(json),
-      'SERVER_PING'         => ServerPingMessage.fromJson(json),
-      _                     => UnknownServerMessage(json),
+      'SERVER_WELCOME' => ServerWelcomeMessage.fromJson(json),
+      'SERVER_REJECT' => ServerRejectMessage.fromJson(json),
+      'SERVER_TALLY' => ServerTallyMessage.fromJson(json),
+      'SERVER_BITRATE_CMD' => ServerBitrateCommandMessage.fromJson(json),
+      'SERVER_IFB_ANSWER' => ServerIFBAnswerMessage.fromJson(json),
+      'SERVER_ICE_CANDIDATE' => ServerICECandidateMessage.fromJson(json),
+      'SERVER_IFB_HANGUP' => ServerIFBHangupMessage.fromJson(json),
+      'SERVER_ERROR' => ServerErrorMessage.fromJson(json),
+      'SERVER_PING' => ServerPingMessage.fromJson(json),
+      _ => UnknownServerMessage(json),
     };
   }
 }
@@ -196,14 +197,16 @@ final class ServerRejectMessage extends ServerMessage {
   final String code;
   const ServerRejectMessage({required this.reason, required this.code});
   factory ServerRejectMessage.fromJson(Map<String, dynamic> j) =>
-      ServerRejectMessage(reason: j['reason'] as String, code: j['code'] as String);
+      ServerRejectMessage(
+          reason: j['reason'] as String, code: j['code'] as String);
 }
 
 final class ServerTallyMessage extends ServerMessage {
   final String reporterId;
   final TallyState state;
   const ServerTallyMessage({required this.reporterId, required this.state});
-  factory ServerTallyMessage.fromJson(Map<String, dynamic> j) => ServerTallyMessage(
+  factory ServerTallyMessage.fromJson(Map<String, dynamic> j) =>
+      ServerTallyMessage(
         reporterId: j['reporterId'] as String,
         state: TallyStateExtension.fromJson(j['state'] as String),
       );
@@ -230,23 +233,27 @@ final class ServerBitrateCommandMessage extends ServerMessage {
         targetBitrate: j['targetBitrate'] as int,
         maxBitrate: j['maxBitrate'] as int,
         minBitrate: j['minBitrate'] as int,
-        encodingPreset: EncodingPresetExtension.fromJson(j['encodingPreset'] as String),
+        encodingPreset:
+            EncodingPresetExtension.fromJson(j['encodingPreset'] as String),
       );
 }
 
 final class ServerIFBAnswerMessage extends ServerMessage {
   final String reporterId;
   final String sdpAnswer;
-  const ServerIFBAnswerMessage({required this.reporterId, required this.sdpAnswer});
+  const ServerIFBAnswerMessage(
+      {required this.reporterId, required this.sdpAnswer});
   factory ServerIFBAnswerMessage.fromJson(Map<String, dynamic> j) =>
       ServerIFBAnswerMessage(
-          reporterId: j['reporterId'] as String, sdpAnswer: j['sdpAnswer'] as String);
+          reporterId: j['reporterId'] as String,
+          sdpAnswer: j['sdpAnswer'] as String);
 }
 
 final class ServerICECandidateMessage extends ServerMessage {
   final String reporterId;
   final Map<String, dynamic> candidate;
-  const ServerICECandidateMessage({required this.reporterId, required this.candidate});
+  const ServerICECandidateMessage(
+      {required this.reporterId, required this.candidate});
   factory ServerICECandidateMessage.fromJson(Map<String, dynamic> j) =>
       ServerICECandidateMessage(
           reporterId: j['reporterId'] as String,
@@ -269,7 +276,8 @@ final class ServerErrorMessage extends ServerMessage {
   final String message;
   const ServerErrorMessage({required this.code, required this.message});
   factory ServerErrorMessage.fromJson(Map<String, dynamic> j) =>
-      ServerErrorMessage(code: j['code'] as String, message: j['message'] as String);
+      ServerErrorMessage(
+          code: j['code'] as String, message: j['message'] as String);
 }
 
 final class ServerPingMessage extends ServerMessage {

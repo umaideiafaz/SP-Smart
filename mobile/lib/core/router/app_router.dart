@@ -6,12 +6,11 @@ import 'package:sp_smart/features/setup/presentation/setup_screen.dart';
 import 'package:sp_smart/features/broadcast/presentation/broadcast_screen.dart';
 import 'package:sp_smart/features/settings/presentation/settings_screen.dart';
 
-
 // ── Route names ───────────────────────────────────────────────
 abstract class Routes {
-  static const setup     = '/';
+  static const setup = '/';
   static const broadcast = '/broadcast';
-  static const settings  = '/settings';
+  static const settings = '/settings';
 }
 
 // @riverpod
@@ -49,4 +48,3 @@ GoRouter appRouter(Ref ref) {
 }
 
 final appRouterProvider = Provider<GoRouter>(appRouter);
-

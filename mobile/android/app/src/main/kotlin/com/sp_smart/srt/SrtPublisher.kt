@@ -51,13 +51,16 @@ class SrtPublisher(
     // ─────────────────────────────────────────────────────────
 
     fun startPipeline(
-        host: String, port: Int, streamKey: String, latencyMs: Int, node: String,
+        host: String, port: Int, streamKey: String, passphrase: String,
+        latencyMs: Int, node: String,
         width: Int = 1920, height: Int = 1080, fps: Int = 30, bitrateKbps: Int = 2000
     ): Boolean {
         Log.i(TAG, "Starting pipeline: $width x $height @ $fps fps -> $host:$port")
 
         // 1. Inicia SRT via JNI
-        val connected = nativeConnect(host, port, streamKey, latencyMs, node)
+        val connected = nativeConnect(
+            host, port, streamKey, passphrase, latencyMs, node
+        )
         if (!connected) {
             Log.e(TAG, "Failed to connect SRT socket")
             return false
@@ -111,8 +114,14 @@ class SrtPublisher(
     // Declarações JNI
     // ─────────────────────────────────────────────────────────
     private external fun nativeInit()
-    external fun nativeConnect(host: String, port: Int, streamKey: String, latencyMs: Int, node: String): Boolean
-    external fun nativeSwitchDestination(host: String, port: Int, streamKey: String, latencyMs: Int, node: String): Boolean
+    external fun nativeConnect(
+        host: String, port: Int, streamKey: String, passphrase: String,
+        latencyMs: Int, node: String
+    ): Boolean
+    external fun nativeSwitchDestination(
+        host: String, port: Int, streamKey: String, passphrase: String,
+        latencyMs: Int, node: String
+    ): Boolean
     external fun nativeDisconnect()
     external fun nativeSendPacket(data: ByteArray, size: Int, pts: Long)
     external fun nativeSetTargetBitrate(bitrateKbps: Int)

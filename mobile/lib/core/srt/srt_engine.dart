@@ -13,14 +13,13 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-
 // ── Estados ───────────────────────────────────────────────────
 enum SrtConnectionState {
   idle,
   connecting,
   connected,
   streaming,
-  switching,     // NOVO: comutando destino (drena buffer antes de trocar)
+  switching, // NOVO: comutando destino (drena buffer antes de trocar)
   disconnected,
   error,
 }
@@ -33,6 +32,7 @@ class SrtDestination {
   final String host;
   final int port;
   final String streamKey;
+  final String passphrase;
   final int latencyMs;
   final SrtActiveNode node;
 
@@ -40,6 +40,7 @@ class SrtDestination {
     required this.host,
     required this.port,
     required this.streamKey,
+    required this.passphrase,
     this.latencyMs = 120,
     this.node = SrtActiveNode.none,
   });
@@ -74,22 +75,24 @@ class SrtStats {
   factory SrtStats.fromMap(Map<dynamic, dynamic> map) => SrtStats(
         sendBitrateKbps: (map['sendBitrateKbps'] as num?)?.toInt() ?? 0,
         rttMs: (map['rttMs'] as num?)?.toInt() ?? 0,
-        packetLossPercent: (map['packetLossPercent'] as num?)?.toDouble() ?? 0.0,
-        retransmittedPackets: (map['retransmittedPackets'] as num?)?.toInt() ?? 0,
+        packetLossPercent:
+            (map['packetLossPercent'] as num?)?.toDouble() ?? 0.0,
+        retransmittedPackets:
+            (map['retransmittedPackets'] as num?)?.toInt() ?? 0,
         droppedPackets: (map['droppedPackets'] as num?)?.toInt() ?? 0,
-        sendBufferFillPercent: (map['sendBufferFillPercent'] as num?)?.toInt() ?? 0,
+        sendBufferFillPercent:
+            (map['sendBufferFillPercent'] as num?)?.toInt() ?? 0,
         activeNode: _parseNode(map['activeNode'] as String? ?? ''),
       );
 
   static SrtActiveNode _parseNode(String s) => switch (s) {
         'primary' => SrtActiveNode.primary,
-        'backup'  => SrtActiveNode.backup,
-        _         => SrtActiveNode.none,
+        'backup' => SrtActiveNode.backup,
+        _ => SrtActiveNode.none,
       };
 
   @override
-  String toString() =>
-      'SrtStats(${activeNode.name} | ${sendBitrateKbps}kbps | '
+  String toString() => 'SrtStats(${activeNode.name} | ${sendBitrateKbps}kbps | '
       'rtt=${rttMs}ms | loss=${packetLossPercent.toStringAsFixed(2)}%)';
 }
 
@@ -113,7 +116,7 @@ class SrtStats {
 /// { event: 'error',            code: int, message: String }
 class SrtEngine {
   static const _methodChannel = MethodChannel('sp.smart/srt');
-  static const _eventChannel  = EventChannel('sp.smart/srt/events');
+  static const _eventChannel = EventChannel('sp.smart/srt/events');
 
   // ── Estado ────────────────────────────────────────────────
   SrtConnectionState _state = SrtConnectionState.idle;
@@ -129,14 +132,15 @@ class SrtEngine {
   int get failoverCount => _failoverCount;
 
   // ── Streams ───────────────────────────────────────────────
-  final _stateCtrl   = StreamController<SrtConnectionState>.broadcast();
-  final _statsCtrl   = StreamController<SrtStats>.broadcast();
-  final _switchCtrl  = StreamController<SrtDestination>.broadcast();
+  final _stateCtrl = StreamController<SrtConnectionState>.broadcast();
+  final _statsCtrl = StreamController<SrtStats>.broadcast();
+  final _switchCtrl = StreamController<SrtDestination>.broadcast();
 
-  Stream<SrtConnectionState> get stateStream  => _stateCtrl.stream;
-  Stream<SrtStats>           get statsStream  => _statsCtrl.stream;
+  Stream<SrtConnectionState> get stateStream => _stateCtrl.stream;
+  Stream<SrtStats> get statsStream => _statsCtrl.stream;
+
   /// Emite cada vez que switchDestination completa com sucesso.
-  Stream<SrtDestination>     get switchStream => _switchCtrl.stream;
+  Stream<SrtDestination> get switchStream => _switchCtrl.stream;
 
   StreamSubscription<dynamic>? _eventSubscription;
 
@@ -146,9 +150,9 @@ class SrtEngine {
 
   void initialize() {
     _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
-      _handleNativeEvent,
-      onError: (e) => _stateCtrl.addError(e),
-    );
+          _handleNativeEvent,
+          onError: (e) => _stateCtrl.addError(e),
+        );
   }
 
   // ─────────────────────────────────────────────────────────
@@ -159,11 +163,12 @@ class SrtEngine {
   Future<bool> connect(SrtDestination destination) async {
     try {
       final result = await _methodChannel.invokeMethod<bool>('connect', {
-        'host':             destination.host,
-        'port':             destination.port,
-        'streamKey':        destination.streamKey,
-        'latencyMs':        destination.latencyMs,
-        'node':             destination.node.name,
+        'host': destination.host,
+        'port': destination.port,
+        'streamKey': destination.streamKey,
+        'passphrase': destination.passphrase,
+        'latencyMs': destination.latencyMs,
+        'node': destination.node.name,
       });
       if (result == true) {
         _currentDestination = destination;
@@ -191,11 +196,12 @@ class SrtEngine {
       final result = await _methodChannel.invokeMethod<bool>(
         'switchDestination',
         {
-          'host':      newDestination.host,
-          'port':      newDestination.port,
+          'host': newDestination.host,
+          'port': newDestination.port,
           'streamKey': newDestination.streamKey,
+          'passphrase': newDestination.passphrase,
           'latencyMs': newDestination.latencyMs,
-          'node':      newDestination.node.name,
+          'node': newDestination.node.name,
         },
       );
       if (result == true) {
@@ -236,7 +242,8 @@ class SrtEngine {
   /// Snapshot instantâneo de estatísticas SRT.
   Future<SrtStats?> getStats() async {
     try {
-      final map = await _methodChannel.invokeMapMethod<dynamic, dynamic>('getStats');
+      final map =
+          await _methodChannel.invokeMapMethod<dynamic, dynamic>('getStats');
       return map != null ? SrtStats.fromMap(map) : null;
     } on PlatformException {
       return null;
@@ -283,19 +290,19 @@ class SrtEngine {
   }
 
   static SrtConnectionState _parseState(String s) => switch (s) {
-        'connecting'   => SrtConnectionState.connecting,
-        'connected'    => SrtConnectionState.connected,
-        'streaming'    => SrtConnectionState.streaming,
-        'switching'    => SrtConnectionState.switching,
+        'connecting' => SrtConnectionState.connecting,
+        'connected' => SrtConnectionState.connected,
+        'streaming' => SrtConnectionState.streaming,
+        'switching' => SrtConnectionState.switching,
         'disconnected' => SrtConnectionState.disconnected,
-        'error'        => SrtConnectionState.error,
-        _              => SrtConnectionState.idle,
+        'error' => SrtConnectionState.error,
+        _ => SrtConnectionState.idle,
       };
 
   static SrtActiveNode _parseNode(String s) => switch (s) {
         'primary' => SrtActiveNode.primary,
-        'backup'  => SrtActiveNode.backup,
-        _         => SrtActiveNode.none,
+        'backup' => SrtActiveNode.backup,
+        _ => SrtActiveNode.none,
       };
 
   void dispose() {
@@ -314,4 +321,3 @@ SrtEngine srtEngine(Ref ref) {
 }
 
 final srtEngineProvider = Provider<SrtEngine>(srtEngine);
-

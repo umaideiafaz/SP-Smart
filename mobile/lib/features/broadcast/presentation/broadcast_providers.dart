@@ -5,6 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sp_smart/core/network/protocol.dart';
 import 'package:sp_smart/core/network/signaling_service.dart';
 
+/// Evento usado para manter o socket SRT no mesmo no eleito pela sinalizacao.
+final failoverEventProvider = StreamProvider<FailoverEvent>((ref) {
+  return ref.watch(signalingServiceProvider).failoverEventStream;
+});
+
 /// Provider que escuta o messageStream do SignalingService
 /// e extrai o estado atual do Tally (PGM, PVW, IDLE).
 final tallyStateProvider = StreamProvider<TallyState>((ref) async* {

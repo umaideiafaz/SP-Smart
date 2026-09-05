@@ -30,7 +30,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:logger/logger.dart';
 import 'package:sp_smart/core/network/protocol.dart';
 import 'package:sp_smart/core/config/app_config.dart';
-
+import 'package:sp_smart/core/utils/auth_utils.dart';
 
 // ── Estado da Conexão ────────────────────────────────────────
 enum SignalingState {
@@ -38,9 +38,9 @@ enum SignalingState {
   connecting,
   authenticating,
   connected,
-  failoverPending,  // primary falhou, aguardando switch para backup
-  reconnecting,     // tentando mesmo nó com backoff
-  probing,          // verificando se primary voltou (background)
+  failoverPending, // primary falhou, aguardando switch para backup
+  reconnecting, // tentando mesmo nó com backoff
+  probing, // verificando se primary voltou (background)
   error,
 }
 
@@ -62,16 +62,25 @@ class FailoverEvent {
   });
 }
 
+/// Resultado da corrida TCP executada antes da sessao de midia.
+class RouteSelection {
+  final ServerEndpoint endpoint;
+  final Duration rtt;
+
+  const RouteSelection({required this.endpoint, required this.rtt});
+}
+
 // ── Configurações de Timing ──────────────────────────────────
-const _kConnectTimeoutSec        = 6;     // timeout de conexão WS
-const _kHeartbeatIntervalSec     = 4;     // frequência do ping local
-const _kHeartbeatTimeoutSec      = 12;    // sem pong → considera morto
-const _kFailoverDelayMs          = 500;   // espera antes de comutar
-const _kPrimaryProbeIntervalSec  = 30;    // intervalo de sondagem do primary
-const _kReconnectInitialMs       = 1000;
-const _kReconnectMaxMs           = 30000;
-const _kReconnectBackoffFactor   = 1.5;
-const _kMaxReconnectSameNode     = 3;     // tentativas no mesmo nó antes de failover
+const _kConnectTimeoutSec = 6; // timeout de conexão WS
+const _kRouteProbeTimeoutMs = 1200; // limite da corrida TCP inicial
+const _kHeartbeatIntervalSec = 4; // frequência do ping local
+const _kHeartbeatTimeoutSec = 12; // sem pong → considera morto
+const _kFailoverDelayMs = 500; // espera antes de comutar
+const _kPrimaryProbeIntervalSec = 30; // intervalo de sondagem do primary
+const _kReconnectInitialMs = 1000;
+const _kReconnectMaxMs = 30000;
+const _kReconnectBackoffFactor = 1.5;
+const _kMaxReconnectSameNode = 3; // tentativas no mesmo nó antes de failover
 
 // ─────────────────────────────────────────────────────────────
 
@@ -83,18 +92,17 @@ const _kMaxReconnectSameNode     = 3;     // tentativas no mesmo nó antes de fa
 ///  - [messageStream]       mensagens tipadas do servidor
 ///  - [failoverEventStream] eventos de comutação (para log/UI)
 class SignalingService {
-  SignalingService(this._ref);
-
-  final Ref _ref;
+  SignalingService();
   final _log = Logger(printer: PrettyPrinter(methodCount: 0));
 
   // ── Nó e Config Ativos ────────────────────────────────────
   List<ServerEndpoint> _endpoints = [];
-  int _activeIndex = 0;       // índice em _endpoints
+  int _activeIndex = 0; // índice em _endpoints
   ServerEndpoint? get activeEndpoint =>
       _endpoints.isNotEmpty ? _endpoints[_activeIndex] : null;
-  ActiveNode get activeNode =>
-      _activeIndex == 0 ? ActiveNode.primary : ActiveNode.backup;
+  ActiveNode get activeNode => activeEndpoint?.isPrimary == true
+      ? ActiveNode.primary
+      : ActiveNode.backup;
 
   // ── Canal WS ─────────────────────────────────────────────
   WebSocketChannel? _channel;
@@ -109,24 +117,24 @@ class SignalingService {
 
   // ── Contadores ───────────────────────────────────────────
   int _reconnectAttempts = 0;
-  int _reconnectDelayMs  = _kReconnectInitialMs;
+  int _reconnectDelayMs = _kReconnectInitialMs;
 
   // ── Streams ───────────────────────────────────────────────
-  final _stateCtrl    = StreamController<SignalingState>.broadcast();
-  final _nodeCtrl     = StreamController<ActiveNode>.broadcast();
-  final _msgCtrl      = StreamController<ServerMessage>.broadcast();
+  final _stateCtrl = StreamController<SignalingState>.broadcast();
+  final _nodeCtrl = StreamController<ActiveNode>.broadcast();
+  final _msgCtrl = StreamController<ServerMessage>.broadcast();
   final _failoverCtrl = StreamController<FailoverEvent>.broadcast();
 
   /// Stream separado para mensagens de sinalização WebRTC/IFB.
   /// O IFBService se inscreve aqui; o messageStream principal
   /// continua servindo Tally, Bitrate e Welcome.
-  final _ifbMsgCtrl   = StreamController<Map<String, dynamic>>.broadcast();
+  final _ifbMsgCtrl = StreamController<Map<String, dynamic>>.broadcast();
 
-  Stream<SignalingState>          get stateStream        => _stateCtrl.stream;
-  Stream<ActiveNode>              get activeNodeStream   => _nodeCtrl.stream;
-  Stream<ServerMessage>           get messageStream      => _msgCtrl.stream;
-  Stream<FailoverEvent>           get failoverEventStream => _failoverCtrl.stream;
-  Stream<Map<String, dynamic>>    get ifbMessageStream   => _ifbMsgCtrl.stream;
+  Stream<SignalingState> get stateStream => _stateCtrl.stream;
+  Stream<ActiveNode> get activeNodeStream => _nodeCtrl.stream;
+  Stream<ServerMessage> get messageStream => _msgCtrl.stream;
+  Stream<FailoverEvent> get failoverEventStream => _failoverCtrl.stream;
+  Stream<Map<String, dynamic>> get ifbMessageStream => _ifbMsgCtrl.stream;
 
   SignalingState _state = SignalingState.disconnected;
   SignalingState get state => _state;
@@ -134,6 +142,11 @@ class SignalingService {
   // ── Informações da Sessão ─────────────────────────────────
   String? sessionId;
   String? srtIngestUrl;
+  String _reporterId = '';
+  String _displayName = '';
+  String _authSecret = '';
+  String _srtStreamKey = '';
+  Completer<void>? _authenticationCompleter;
 
   // ── Último timestamp de pong recebido ────────────────────
   DateTime _lastPongAt = DateTime.now();
@@ -142,20 +155,88 @@ class SignalingService {
   // API PÚBLICA
   // ─────────────────────────────────────────────────────────
 
-  /// Inicia a conexão com a lista de endpoints configurados.
-  /// Sempre começa pelo Primary (índice 0).
-  Future<void> connect(List<ServerEndpoint> endpoints) async {
+  /// Faz uma corrida TCP entre os nos, conecta ao primeiro que responder e
+  /// conclui somente depois do SERVER_WELCOME.
+  Future<RouteSelection> connect({
+    required List<ServerEndpoint> endpoints,
+    required String reporterId,
+    required String displayName,
+    required String authSecret,
+    required String srtStreamKey,
+  }) async {
     if (endpoints.isEmpty) {
-      _log.e('connect() chamado com lista de endpoints vazia!');
-      return;
+      throw ArgumentError.value(endpoints, 'endpoints', 'Lista vazia');
     }
+
+    _clearAllTimers();
+    _closeChannel();
     _endpoints = endpoints;
-    _activeIndex = 0;
+    _reporterId = reporterId;
+    _displayName = displayName;
+    _authSecret = authSecret;
+    _srtStreamKey = srtStreamKey;
     _reconnectAttempts = 0;
     _reconnectDelayMs = _kReconnectInitialMs;
 
+    final selection = await selectFastestEndpoint(endpoints);
+    _activeIndex = _endpoints.indexOf(selection.endpoint);
+    _nodeCtrl.add(activeNode);
+    _authenticationCompleter = Completer<void>();
+
     _setState(SignalingState.connecting);
     await _doConnect(_endpoints[_activeIndex]);
+
+    try {
+      await _authenticationCompleter!.future.timeout(
+        const Duration(seconds: _kConnectTimeoutSec),
+      );
+    } on TimeoutException {
+      disconnect();
+      throw TimeoutException('Servidor nao confirmou a autenticacao');
+    }
+
+    return selection;
+  }
+
+  /// Primeira conexao TCP bem-sucedida vence. Como as sondagens partem juntas,
+  /// o primeiro SYN/ACK observado representa o menor RTT disponivel na sessao.
+  Future<RouteSelection> selectFastestEndpoint(
+    List<ServerEndpoint> endpoints,
+  ) async {
+    final winner = Completer<RouteSelection>();
+    var pending = endpoints.length;
+
+    for (final endpoint in endpoints) {
+      unawaited(() async {
+        final stopwatch = Stopwatch()..start();
+        try {
+          final socket = await Socket.connect(
+            endpoint.host,
+            endpoint.signalingPort,
+            timeout: const Duration(milliseconds: _kRouteProbeTimeoutMs),
+          );
+          stopwatch.stop();
+          socket.destroy();
+          if (!winner.isCompleted) {
+            winner.complete(RouteSelection(
+              endpoint: endpoint,
+              rtt: stopwatch.elapsed,
+            ));
+          }
+        } catch (_) {
+          stopwatch.stop();
+        } finally {
+          pending--;
+          if (pending == 0 && !winner.isCompleted) {
+            winner.completeError(
+              const SocketException('Nenhum no respondeu a corrida TCP'),
+            );
+          }
+        }
+      }());
+    }
+
+    return winner.future;
   }
 
   void sendHello({
@@ -165,7 +246,7 @@ class SignalingService {
     required int timestamp,
     required String srtStreamKey,
   }) {
-    _send(ClientHelloMessage(
+    _sendRaw(ClientHelloMessage(
       reporterId: reporterId,
       displayName: displayName,
       authToken: authToken,
@@ -187,9 +268,9 @@ class SignalingService {
   /// O servidor encaminha ao Studio Desktop conectado.
   Future<void> sendIFBRequest(String reporterId, String sdpOffer) async {
     _send({
-      'type':      'CLIENT_IFB_REQUEST',
+      'type': 'CLIENT_IFB_REQUEST',
       'reporterId': reporterId,
-      'sdpOffer':   sdpOffer,
+      'sdpOffer': sdpOffer,
     });
     _log.i('[IFB] SDP offer sent for $reporterId (${sdpOffer.length} bytes)');
   }
@@ -202,12 +283,12 @@ class SignalingService {
     String sessionType = 'ifb',
   }) {
     _send({
-      'type':       'CLIENT_ICE_CANDIDATE',
-      'reporterId':  reporterId,
+      'type': 'CLIENT_ICE_CANDIDATE',
+      'reporterId': reporterId,
       'sessionType': sessionType,
       'candidate': {
-        'candidate':     candidate.candidate ?? '',
-        'sdpMid':        candidate.sdpMid,
+        'candidate': candidate.candidate ?? '',
+        'sdpMid': candidate.sdpMid,
         'sdpMLineIndex': candidate.sdpMLineIndex,
       },
     });
@@ -216,9 +297,9 @@ class SignalingService {
   /// Notifica o servidor (e o Studio) que o repórter encerrou o IFB.
   void sendIFBHangup(String reporterId, {String? reason}) {
     _send({
-      'type':       'CLIENT_BYE',       // Reutiliza CLIENT_BYE com reason IFB
-      'reporterId':  reporterId,
-      'reason':      reason ?? 'IFB_HANGUP',
+      'type': 'CLIENT_BYE', // Reutiliza CLIENT_BYE com reason IFB
+      'reporterId': reporterId,
+      'reason': reason ?? 'IFB_HANGUP',
     });
   }
 
@@ -249,9 +330,9 @@ class SignalingService {
   Future<void> _doConnect(ServerEndpoint endpoint) async {
     _log.i('Conectando ao nó ${endpoint.label}: ${endpoint.wsUrl}');
     try {
-      final uri = Uri.parse(endpoint.wsUrl);
       _channel = IOWebSocketChannel.connect(
-        uri,
+        endpoint.wsUri,
+        headers: {'Authorization': 'Bearer $_authSecret'},
         connectTimeout: const Duration(seconds: _kConnectTimeoutSec),
       );
 
@@ -262,7 +343,21 @@ class SignalingService {
         cancelOnError: false,
       );
 
+      await _channel!.ready;
       _setState(SignalingState.authenticating);
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      sendHello(
+        reporterId: _reporterId,
+        displayName: _displayName,
+        authToken: computeAuthToken(
+          reporterId: _reporterId,
+          timestamp: timestamp,
+          authSecret: _authSecret,
+        ),
+        timestamp: timestamp,
+        srtStreamKey: _srtStreamKey,
+      );
     } catch (e) {
       _log.e('Falha de conexão no nó ${endpoint.label}', error: e);
       _handleConnectionFailure();
@@ -282,7 +377,10 @@ class SignalingService {
       const Duration(seconds: _kHeartbeatIntervalSec),
       (_) {
         if (_state == SignalingState.connected) {
-          _send({'type': 'CLIENT_PONG', 'timestamp': DateTime.now().millisecondsSinceEpoch});
+          _send({
+            'type': 'CLIENT_PONG',
+            'timestamp': DateTime.now().millisecondsSinceEpoch
+          });
         }
       },
     );
@@ -294,7 +392,8 @@ class SignalingService {
       (_) {
         final silence = DateTime.now().difference(_lastPongAt).inSeconds;
         if (silence >= _kHeartbeatTimeoutSec) {
-          _log.w('Heartbeat timeout: ${silence}s sem resposta do nó ${activeEndpoint?.label}');
+          _log.w(
+              'Heartbeat timeout: ${silence}s sem resposta do nó ${activeEndpoint?.label}');
           _triggerFailover(reason: 'Heartbeat timeout (${silence}s)');
         }
       },
@@ -347,7 +446,8 @@ class SignalingService {
     _closeChannel();
     _setState(SignalingState.failoverPending);
 
-    _log.w('FAILOVER: $reason — comutando ${fromNode.name} → próximo nó em ${_kFailoverDelayMs}ms');
+    _log.w(
+        'FAILOVER: $reason — comutando ${fromNode.name} → próximo nó em ${_kFailoverDelayMs}ms');
 
     _failoverTimer = Timer(const Duration(milliseconds: _kFailoverDelayMs), () {
       // Avança para o próximo endpoint na lista (circular)
@@ -356,7 +456,8 @@ class SignalingService {
       _reconnectDelayMs = _kReconnectInitialMs;
 
       final toNode = activeNode;
-      _log.w('FAILOVER EXECUTADO: ${fromNode.name} → ${toNode.name} (${activeEndpoint?.host})');
+      _log.w(
+          'FAILOVER EXECUTADO: ${fromNode.name} → ${toNode.name} (${activeEndpoint?.host})');
 
       _failoverCtrl.add(FailoverEvent(
         from: fromNode,
@@ -462,12 +563,18 @@ class SignalingService {
       }
 
       if (msg is ServerWelcomeMessage) {
-        sessionId    = msg.sessionId;
+        sessionId = msg.sessionId;
         srtIngestUrl = msg.srtIngestUrl;
         _reconnectAttempts = 0;
-        _reconnectDelayMs  = _kReconnectInitialMs;
+        _reconnectDelayMs = _kReconnectInitialMs;
         _setState(SignalingState.connected);
+        if (_authenticationCompleter?.isCompleted == false) {
+          _authenticationCompleter!.complete();
+        }
         _startHeartbeat();
+        if (activeNode == ActiveNode.backup) {
+          _startPrimaryProbe();
+        }
         _log.i(
           'Autenticado no nó ${activeEndpoint?.label}. '
           'Session: ${msg.sessionId} | SRT: ${msg.srtIngestUrl}',
@@ -526,10 +633,18 @@ class SignalingService {
       return;
     }
     try {
-      _channel!.sink.add(jsonEncode(payload));
+      _sendRaw(payload);
     } catch (e) {
       _log.e('Erro ao enviar mensagem', error: e);
     }
+  }
+
+  void _sendRaw(Map<String, dynamic> payload) {
+    final channel = _channel;
+    if (channel == null) {
+      throw StateError('WebSocket nao conectado');
+    }
+    channel.sink.add(jsonEncode(payload));
   }
 
   void _closeChannel() {
@@ -556,10 +671,9 @@ class SignalingService {
 }
 
 SignalingService signalingService(Ref ref) {
-  final service = SignalingService(ref);
+  final service = SignalingService();
   ref.onDispose(service.dispose);
   return service;
 }
 
 final signalingServiceProvider = Provider<SignalingService>(signalingService);
-

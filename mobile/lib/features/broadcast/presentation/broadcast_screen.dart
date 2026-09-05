@@ -8,9 +8,11 @@
 // - Botão central de gravação "GO LIVE" para SRT.
 // - IFB WebRTC discreto.
 // ============================================================
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sp_smart/core/config/app_config.dart';
 import 'package:sp_smart/core/network/protocol.dart';
 import 'package:sp_smart/core/srt/srt_engine.dart';
 import 'package:sp_smart/core/network/signaling_service.dart';
@@ -25,6 +27,28 @@ class BroadcastScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tallyState = ref.watch(tallyStateProvider).value ?? TallyState.idle;
     final isPgm = tallyState == TallyState.pgm;
+    final config = ref.watch(appConfigNotifierProvider).valueOrNull;
+
+    ref.listen<AsyncValue<FailoverEvent>>(failoverEventProvider, (_, next) {
+      next.whenData((_) {
+        final engine = ref.read(srtEngineProvider);
+        final endpoint = ref.read(signalingServiceProvider).activeEndpoint;
+        if (config == null ||
+            endpoint == null ||
+            engine.currentDestination == null) {
+          return;
+        }
+
+        unawaited(engine.switchDestination(SrtDestination(
+          host: endpoint.host,
+          port: endpoint.srtPort,
+          streamKey: config.srtStreamKey,
+          passphrase: config.authSecret,
+          node:
+              endpoint.isPrimary ? SrtActiveNode.primary : SrtActiveNode.backup,
+        )));
+      });
+    });
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -53,7 +77,9 @@ class BroadcastScreen extends ConsumerWidget {
 
           // ── 3. Overlay Escurecido Superior (Legibilidade) ───
           Positioned(
-            top: 0, left: 0, right: 0,
+            top: 0,
+            left: 0,
+            right: 0,
             height: 120,
             child: IgnorePointer(
               child: Container(
@@ -73,7 +99,8 @@ class BroadcastScreen extends ConsumerWidget {
             child: Align(
               alignment: Alignment.topCenter,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -91,19 +118,20 @@ class BroadcastScreen extends ConsumerWidget {
             child: Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
-                padding: const EdgeInsets.only(bottom: 24.0, left: 24, right: 24),
+                padding:
+                    const EdgeInsets.only(bottom: 24.0, left: 24, right: 24),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     // Botão IFB (Esquerda)
-                    const _IFBToggleButton(reporterId: 'reporter-demo'),
-                    
+                    _IFBToggleButton(reporterId: config?.reporterId ?? ''),
+
                     // GO LIVE (Centro)
                     const _GoLiveButton(),
-                    
+
                     // Espaçador para simetria (Direita)
-                    const SizedBox(width: 56), 
+                    const SizedBox(width: 56),
                   ],
                 ),
               ),
@@ -141,43 +169,52 @@ class _SRTStatusHUD extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
-                    width: 8, height: 8,
+                    width: 8,
+                    height: 8,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isLive ? Colors.greenAccent : (isSwitching ? Colors.orangeAccent : Colors.white30),
+                      color: isLive
+                          ? Colors.greenAccent
+                          : (isSwitching
+                              ? Colors.orangeAccent
+                              : Colors.white30),
                     ),
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    isLive ? 'SRT LIVE' : (isSwitching ? 'FAILOVER...' : 'SRT OFF'),
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w800),
+                    isLive
+                        ? 'SRT LIVE'
+                        : (isSwitching ? 'FAILOVER...' : 'SRT OFF'),
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800),
                   ),
                 ],
               ),
-              
+
               // Linha 2: Telemetria Real-Time
               if (isLive || isSwitching) ...[
                 const SizedBox(height: 6),
                 StreamBuilder<SrtStats>(
-                  stream: engine.statsStream,
-                  builder: (context, snapshot) {
-                    final stats = snapshot.data;
-                    final bitrate = stats?.sendBitrateKbps ?? 0;
-                    final rtt = stats?.rttMs ?? 0;
-                    final node = stats?.activeNode.name.toUpperCase() ?? '';
+                    stream: engine.statsStream,
+                    builder: (context, snapshot) {
+                      final stats = snapshot.data;
+                      final bitrate = stats?.sendBitrateKbps ?? 0;
+                      final rtt = stats?.rttMs ?? 0;
+                      final node = stats?.activeNode.name.toUpperCase() ?? '';
 
-                    return Text(
-                      '${(bitrate / 1000).toStringAsFixed(1)} Mbps • RTT ${rtt}ms\nNó: $node',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w600,
-                        height: 1.3,
-                      ),
-                    );
-                  }
-                ),
+                      return Text(
+                        '${(bitrate / 1000).toStringAsFixed(1)} Mbps • RTT ${rtt}ms\nNó: $node',
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
+                      );
+                    }),
               ],
             ],
           ),
@@ -206,7 +243,10 @@ class _SystemHUD extends ConsumerWidget {
           children: [
             Text(
               '$battery%',
-              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700),
             ),
             const SizedBox(width: 4),
             Icon(
@@ -222,12 +262,17 @@ class _SystemHUD extends ConsumerWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: tallyState == TallyState.pgm ? const Color(0xFFE53935) : const Color(0xFF43A047),
+              color: tallyState == TallyState.pgm
+                  ? const Color(0xFFE53935)
+                  : const Color(0xFF43A047),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
               tallyState == TallyState.pgm ? 'PGM' : 'PVW',
-              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900),
             ),
           ),
       ],
@@ -245,7 +290,8 @@ class _GoLiveButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final engine = ref.watch(srtEngineProvider);
-    final isStreaming = engine.state == SrtConnectionState.streaming || engine.state == SrtConnectionState.switching;
+    final isStreaming = engine.state == SrtConnectionState.streaming ||
+        engine.state == SrtConnectionState.switching;
     final isConnecting = engine.state == SrtConnectionState.connecting;
 
     return GestureDetector(
@@ -253,32 +299,49 @@ class _GoLiveButton extends ConsumerWidget {
         if (isStreaming || isConnecting) {
           await engine.disconnect();
         } else {
-          // Destino mockado. Na arquitetura real, viria do ServerWelcomeMessage da Fase 1
-          final dest = const SrtDestination(
-            host: '192.168.1.100', port: 8890, streamKey: 'demo-key', node: SrtActiveNode.primary
+          final config = ref.read(appConfigNotifierProvider).valueOrNull;
+          final endpoint = ref.read(signalingServiceProvider).activeEndpoint;
+          if (config == null || endpoint == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Nenhuma rota de servidor ativa')),
+            );
+            return;
+          }
+
+          final dest = SrtDestination(
+            host: endpoint.host,
+            port: endpoint.srtPort,
+            streamKey: config.srtStreamKey,
+            passphrase: config.authSecret,
+            node: endpoint.isPrimary
+                ? SrtActiveNode.primary
+                : SrtActiveNode.backup,
           );
           await engine.connect(dest);
         }
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 300),
-        width: 72, height: 72,
+        width: 72,
+        height: 72,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(color: Colors.white30, width: 4),
-          color: isStreaming ? Colors.redAccent : (isConnecting ? Colors.orange : Colors.transparent),
+          color: isStreaming
+              ? Colors.redAccent
+              : (isConnecting ? Colors.orange : Colors.transparent),
         ),
         child: Center(
-          child: isConnecting 
-            ? const CircularProgressIndicator(color: Colors.white)
-            : Container(
-                width: isStreaming ? 24 : 54,
-                height: isStreaming ? 24 : 54,
-                decoration: BoxDecoration(
-                  color: isStreaming ? Colors.white : Colors.redAccent,
-                  borderRadius: BorderRadius.circular(isStreaming ? 4 : 27),
+          child: isConnecting
+              ? const CircularProgressIndicator(color: Colors.white)
+              : Container(
+                  width: isStreaming ? 24 : 54,
+                  height: isStreaming ? 24 : 54,
+                  decoration: BoxDecoration(
+                    color: isStreaming ? Colors.white : Colors.redAccent,
+                    borderRadius: BorderRadius.circular(isStreaming ? 4 : 27),
+                  ),
                 ),
-              ),
         ),
       ),
     );
@@ -296,18 +359,26 @@ class _IFBToggleButton extends ConsumerWidget {
     final signaling = ref.read(signalingServiceProvider);
 
     final isActive = ifbStatus.state == IFBState.connected;
-    final isLoading = ifbStatus.state == IFBState.requesting || ifbStatus.state == IFBState.connecting;
+    final isLoading = ifbStatus.state == IFBState.requesting ||
+        ifbStatus.state == IFBState.connecting;
 
     return GestureDetector(
       onTap: () {
         if (isLoading) return;
+        if (reporterId.isEmpty || signaling.state != SignalingState.connected) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sinalização ainda não autenticada')),
+          );
+          return;
+        }
         if (isActive) {
-          ifbNotifier.hangup(reporterId: reporterId, signaling: signaling!);
+          ifbNotifier.hangup(reporterId: reporterId, signaling: signaling);
         } else {
           // Aqui ativamos só o áudio (vídeo de retorno oculto para focar na câmera local)
           ifbNotifier.requestIFB(
-            reporterId: reporterId, signaling: signaling!, remoteRenderer: ref.read(remoteVideoRendererProvider)
-          );
+              reporterId: reporterId,
+              signaling: signaling,
+              remoteRenderer: ref.read(remoteVideoRendererProvider));
         }
       },
       child: ClipRRect(
@@ -316,14 +387,20 @@ class _IFBToggleButton extends ConsumerWidget {
           filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 200),
-            width: 56, height: 56,
+            width: 56,
+            height: 56,
             decoration: BoxDecoration(
-              color: isActive ? Colors.blueAccent.withAlpha(200) : Colors.black45,
+              color:
+                  isActive ? Colors.blueAccent.withAlpha(200) : Colors.black45,
               shape: BoxShape.circle,
-              border: Border.all(color: isActive ? Colors.blueAccent : Colors.white24),
+              border: Border.all(
+                  color: isActive ? Colors.blueAccent : Colors.white24),
             ),
             child: isLoading
-                ? const Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                ? const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white))
                 : Icon(
                     isActive ? Icons.headset_mic : Icons.headset_off,
                     color: isActive ? Colors.white : Colors.white54,
@@ -334,5 +411,3 @@ class _IFBToggleButton extends ConsumerWidget {
     );
   }
 }
-
-

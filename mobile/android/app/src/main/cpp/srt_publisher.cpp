@@ -142,7 +142,9 @@ SrtPublisher* getOrCreatePublisher() {
  * Cria e configura um socket SRT para broadcast em modo Caller.
  * Retorna SRT_INVALID_SOCK em caso de erro.
  */
-SRTSOCKET createSocket(const char* host, int port, const char* streamKey, int latencyMs) {
+SRTSOCKET createSocket(
+    const char* host, int port, const char* streamKey,
+    const char* passphrase, int latencyMs) {
     SRTSOCKET s = srt_create_socket();
     if (s == kInvalidSock) {
         LOGE("srt_create_socket failed: %s", srt_getlasterror_str());
@@ -156,6 +158,23 @@ SRTSOCKET createSocket(const char* host, int port, const char* streamKey, int la
     // Stream ID (identificador do stream no MediaMTX)
     if (streamKey && strlen(streamKey) > 0) {
         srt_setsockopt(s, 0, SRTO_STREAMID, streamKey, (int)strlen(streamKey));
+    }
+
+    // Criptografia SRT AES-256. As duas opcoes precisam ser aplicadas antes
+    // de srt_connect(); a passphrase nunca e escrita nos logs.
+    const size_t passphraseLength = passphrase ? strlen(passphrase) : 0;
+    if (passphraseLength < 10 || passphraseLength > 79) {
+        LOGE("Invalid SRT passphrase length: %zu", passphraseLength);
+        srt_close(s);
+        return kInvalidSock;
+    }
+    int pbKeyLen = 32;
+    if (srt_setsockopt(s, 0, SRTO_PBKEYLEN, &pbKeyLen, sizeof(pbKeyLen)) == SRT_ERROR ||
+        srt_setsockopt(s, 0, SRTO_PASSPHRASE, passphrase,
+                       (int)passphraseLength) == SRT_ERROR) {
+        LOGE("Failed to configure SRT AES-256: %s", srt_getlasterror_str());
+        srt_close(s);
+        return kInvalidSock;
     }
 
     // Payload size: 1316 bytes = múltiplo de MPEG-TS packet (188 × 7)
@@ -296,13 +315,13 @@ void monitorLoop(SrtPublisher* pub) {
 void switchDestinationThread(
     SrtPublisher* pub,
     std::string newHost, int newPort,
-    std::string newStreamKey, int latencyMs,
+    std::string newStreamKey, std::string passphrase, int latencyMs,
     std::string newNode)
 {
     LOGI("SwitchDestination: connecting → %s:%d", newHost.c_str(), newPort);
 
     SRTSOCKET pendingSock = createSocket(
-        newHost.c_str(), newPort, newStreamKey.c_str(), latencyMs
+        newHost.c_str(), newPort, newStreamKey.c_str(), passphrase.c_str(), latencyMs
     );
 
     if (pendingSock == kInvalidSock) {
@@ -416,10 +435,12 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeInit(
 JNIEXPORT jboolean JNICALL
 Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
     JNIEnv* env, jobject /*thiz*/,
-    jstring host, jint port, jstring streamKey, jint latencyMs, jstring node)
+    jstring host, jint port, jstring streamKey, jstring passphrase,
+    jint latencyMs, jstring node)
 {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* k = env->GetStringUTFChars(streamKey, nullptr);
+    const char* p = env->GetStringUTFChars(passphrase, nullptr);
     const char* n = env->GetStringUTFChars(node, nullptr);
 
     SrtPublisher* pub = getOrCreatePublisher();
@@ -428,7 +449,7 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
     SRTSOCKET old = pub->activeSock.exchange(kInvalidSock);
     if (old != kInvalidSock) srt_close(old);
 
-    SRTSOCKET s = createSocket(h, port, k, latencyMs);
+    SRTSOCKET s = createSocket(h, port, k, p, latencyMs);
 
     pub->currentHost      = h;
     pub->currentPort      = (int)port;
@@ -438,6 +459,7 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
 
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(streamKey, k);
+    env->ReleaseStringUTFChars(passphrase, p);
     env->ReleaseStringUTFChars(node, n);
 
     if (s == kInvalidSock) {
@@ -494,25 +516,28 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeSendPacket(
 JNIEXPORT jboolean JNICALL
 Java_com_sp_1smart_srt_SrtPublisher_nativeSwitchDestination(
     JNIEnv* env, jobject /*thiz*/,
-    jstring newHost, jint newPort, jstring newStreamKey, jint latencyMs, jstring newNode)
+    jstring newHost, jint newPort, jstring newStreamKey, jstring passphrase,
+    jint latencyMs, jstring newNode)
 {
     const char* h = env->GetStringUTFChars(newHost, nullptr);
     const char* k = env->GetStringUTFChars(newStreamKey, nullptr);
+    const char* p = env->GetStringUTFChars(passphrase, nullptr);
     const char* n = env->GetStringUTFChars(newNode, nullptr);
 
-    std::string sHost(h), sKey(k), sNode(n);
+    std::string sHost(h), sKey(k), sPassphrase(p), sNode(n);
     int sPort    = (int)newPort;
     int sLatency = (int)latencyMs;
 
     env->ReleaseStringUTFChars(newHost, h);
     env->ReleaseStringUTFChars(newStreamKey, k);
+    env->ReleaseStringUTFChars(passphrase, p);
     env->ReleaseStringUTFChars(newNode, n);
 
     SrtPublisher* pub = getOrCreatePublisher();
 
     // Executa o switch em thread separada (não bloqueia o encoder)
     std::thread(switchDestinationThread, pub,
-        sHost, sPort, sKey, sLatency, sNode).detach();
+        sHost, sPort, sKey, sPassphrase, sLatency, sNode).detach();
 
     return JNI_TRUE;
 }

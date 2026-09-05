@@ -39,7 +39,8 @@ class AppTheme {
         ),
       ),
       textTheme: const TextTheme(
-        displaySmall: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.5),
+        displaySmall:
+            TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.5),
         titleLarge: TextStyle(fontWeight: FontWeight.w600),
         bodyMedium: TextStyle(color: Color(0xFFBDBDBD)),
       ),
