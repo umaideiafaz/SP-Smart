@@ -16,19 +16,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use futures_util::{SinkExt, StreamExt};
+use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
+use sha2::Sha256;
 use tokio::{
     net::TcpStream,
     sync::mpsc,
     time::{sleep, Duration},
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream,
+    connect_async,
+    tungstenite::{client::IntoClientRequest, http::HeaderValue, Message},
+    MaybeTlsStream, WebSocketStream,
 };
-use futures_util::{SinkExt, StreamExt};
-use tracing::{error, info, warn, debug};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use tracing::{debug, error, info, warn};
 
 use crate::{
     device_monitor::DiscoveredDevices,
@@ -54,9 +56,9 @@ enum OutboundMsg {
 
 /// Gerencia a conexão de sinalização do Studio e todas as sessões IFB ativas.
 pub struct SignalingClient {
-    studio_id:   String,
+    studio_id: String,
     auth_secret: String,
-    server_url:  String,           // ws://host:port/ws/studio
+    server_url: String, // ws://host:port/ws/studio
 
     /// Channel para enviar mensagens ao loop WS
     outbound_tx: mpsc::UnboundedSender<OutboundMsg>,
@@ -67,9 +69,9 @@ pub struct SignalingClient {
 
 impl SignalingClient {
     pub fn new(
-        studio_id:   String,
+        studio_id: String,
         auth_secret: String,
-        server_url:  String,
+        server_url: String,
     ) -> (Self, mpsc::UnboundedReceiver<OutboundMsg>) {
         let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
         let client = Self {
@@ -84,7 +86,9 @@ impl SignalingClient {
 
     /// Envia uma mensagem JSON para o servidor via WebSocket.
     fn send(&self, payload: Value) {
-        let _ = self.outbound_tx.send(OutboundMsg::SendRaw(payload.to_string()));
+        let _ = self
+            .outbound_tx
+            .send(OutboundMsg::SendRaw(payload.to_string()));
     }
 
     /// Inicia sessão IFB com um repórter.
@@ -93,16 +97,16 @@ impl SignalingClient {
     /// (o offer chega depois que o mobile envia CLIENT_IFB_REQUEST).
     pub fn start_ifb_session(
         &self,
-        config:     IFBSessionConfig,
+        config: IFBSessionConfig,
         discovered: DiscoveredDevices,
     ) -> Result<(), StudioError> {
         let reporter_id = config.reporter_id.clone();
-        let peers       = Arc::clone(&self.peers);
-        let tx          = self.outbound_tx.clone();
+        let peers = Arc::clone(&self.peers);
+        let tx = self.outbound_tx.clone();
 
         // Callbacks para quando o webrtcbin gerar SDP answer e ICE candidates
         let reporter_id_for_answer = reporter_id.clone();
-        let tx_for_answer          = tx.clone();
+        let tx_for_answer = tx.clone();
         let on_sdp_answer: OnSdpAnswerFn = Box::new(move |sdp_answer| {
             let msg = json!({
                 "type":             "STUDIO_IFB_ANSWER",
@@ -113,7 +117,7 @@ impl SignalingClient {
         });
 
         let reporter_id_for_ice = reporter_id.clone();
-        let tx_for_ice          = tx.clone();
+        let tx_for_ice = tx.clone();
         let on_ice: OnIceCandidateFn = Box::new(move |mlineindex, candidate| {
             let msg = json!({
                 "type":             "STUDIO_ICE_CANDIDATE",
@@ -151,7 +155,12 @@ impl SignalingClient {
 
     /// Retorna status de todas as sessões IFB ativas.
     pub fn list_sessions(&self) -> Vec<IFBSessionStatus> {
-        self.peers.lock().unwrap().values().map(|p| p.status()).collect()
+        self.peers
+            .lock()
+            .unwrap()
+            .values()
+            .map(|p| p.status())
+            .collect()
     }
 
     /// Gera o HMAC-SHA256 para autenticação (mesmo algoritmo do mobile).
@@ -173,7 +182,25 @@ impl SignalingClient {
         loop {
             info!("SignalingClient connecting to {}", self_arc.server_url);
 
-            let ws_result = connect_async(&self_arc.server_url).await;
+            let mut request = match self_arc.server_url.as_str().into_client_request() {
+                Ok(request) => request,
+                Err(e) => {
+                    error!("Invalid signaling URL: {}", e);
+                    sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            let bearer = match HeaderValue::from_str(&format!("Bearer {}", self_arc.auth_secret)) {
+                Ok(value) => value,
+                Err(_) => {
+                    error!("AUTH_SECRET cannot be represented as an HTTP header");
+                    sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            request.headers_mut().insert("Authorization", bearer);
+
+            let ws_result = connect_async(request).await;
             match ws_result {
                 Err(e) => {
                     warn!("SignalingClient connection failed: {} — retry in 5s", e);
@@ -182,11 +209,8 @@ impl SignalingClient {
                 }
                 Ok((ws_stream, _)) => {
                     info!("SignalingClient connected");
-                    Self::handle_connection(
-                        Arc::clone(&self_arc),
-                        ws_stream,
-                        &mut outbound_rx,
-                    ).await;
+                    Self::handle_connection(Arc::clone(&self_arc), ws_stream, &mut outbound_rx)
+                        .await;
                     warn!("SignalingClient disconnected — retry in 3s");
                     sleep(Duration::from_secs(3)).await;
                 }
@@ -195,8 +219,8 @@ impl SignalingClient {
     }
 
     async fn handle_connection(
-        client:      Arc<Self>,
-        ws_stream:   WebSocketStream<MaybeTlsStream<TcpStream>>,
+        client: Arc<Self>,
+        ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
         outbound_rx: &mut mpsc::UnboundedReceiver<OutboundMsg>,
     ) {
         let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -220,7 +244,11 @@ impl SignalingClient {
             }
         });
 
-        if ws_write.send(Message::Text(hello.to_string())).await.is_err() {
+        if ws_write
+            .send(Message::Text(hello.to_string()))
+            .await
+            .is_err()
+        {
             error!("Failed to send STUDIO_HELLO");
             return;
         }
@@ -264,11 +292,14 @@ impl SignalingClient {
     /// Processa uma mensagem JSON recebida do servidor.
     async fn handle_server_message(
         &self,
-        text:     &str,
+        text: &str,
         _ws_sink: &mut (impl SinkExt<Message, Error = impl std::fmt::Debug> + Unpin),
     ) {
         let Ok(v) = serde_json::from_str::<Value>(text) else {
-            warn!("SignalingClient: invalid JSON from server: {}", &text[..text.len().min(80)]);
+            warn!(
+                "SignalingClient: invalid JSON from server: {}",
+                &text[..text.len().min(80)]
+            );
             return;
         };
 
@@ -277,13 +308,16 @@ impl SignalingClient {
 
         match msg_type {
             "SERVER_STUDIO_WELCOME" => {
-                info!("Studio authenticated with server: sessionId={:?}", v.get("sessionId"));
+                info!(
+                    "Studio authenticated with server: sessionId={:?}",
+                    v.get("sessionId")
+                );
             }
 
             // Servidor encaminhou o SDP offer de um repórter
             "SERVER_REPORTER_OFFER" => {
                 let reporter_id = v["reporterId"].as_str().unwrap_or("").to_string();
-                let sdp_offer   = v["sdpOffer"].as_str().unwrap_or("").to_string();
+                let sdp_offer = v["sdpOffer"].as_str().unwrap_or("").to_string();
                 info!("Received SDP offer from reporter '{}'", reporter_id);
 
                 let peers = self.peers.lock().unwrap();
@@ -316,8 +350,8 @@ impl SignalingClient {
             "SERVER_REPORTER_ICE" => {
                 let reporter_id = v["reporterId"].as_str().unwrap_or("");
                 if let Some(candidate_obj) = v.get("candidate") {
-                    let candidate   = candidate_obj["candidate"].as_str().unwrap_or("");
-                    let mlineindex  = candidate_obj["sdpMLineIndex"].as_u64().unwrap_or(0) as u32;
+                    let candidate = candidate_obj["candidate"].as_str().unwrap_or("");
+                    let mlineindex = candidate_obj["sdpMLineIndex"].as_u64().unwrap_or(0) as u32;
 
                     let peers = self.peers.lock().unwrap();
                     if let Some(peer) = peers.get(reporter_id) {

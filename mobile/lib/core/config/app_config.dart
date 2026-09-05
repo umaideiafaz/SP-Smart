@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -41,10 +39,10 @@ class ServerEndpoint {
 
   /// WebSocket URL for the signaling connection.
   ///
-  /// Enderecos IP sao usados diretamente na rede privada (ws). Hostnames usam
-  /// TLS (wss), onde o certificado pode ser validado contra o dominio.
+  /// A interface aceita somente DNS. Todo hostname usa TLS e precisa apresentar
+  /// um certificado valido para o dominio informado.
   Uri get wsUri => Uri(
-        scheme: InternetAddress.tryParse(host) == null ? 'wss' : 'ws',
+        scheme: 'wss',
         host: host,
         port: signalingPort,
         path: _kWsPath,
@@ -146,8 +144,8 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
         'reporter-${reporterId.substring(0, 8)}';
 
     final primary = ServerEndpoint(
-      host: prefs.getString(_kPrimaryHostKey) ?? '192.168.1.100',
-      signalingPort: prefs.getInt(_kPrimaryPortKey) ?? 3000,
+      host: prefs.getString(_kPrimaryHostKey) ?? 'spsmart.syncplayer.com.br',
+      signalingPort: prefs.getInt(_kPrimaryPortKey) ?? 443,
       srtPort: prefs.getInt(_kPrimarySrtPortKey) ?? _kDefaultSrtPort,
       isPrimary: true,
     );
@@ -156,7 +154,7 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
     final ServerEndpoint? backup = backupHost.isNotEmpty
         ? ServerEndpoint(
             host: backupHost,
-            signalingPort: prefs.getInt(_kBackupPortKey) ?? 3000,
+            signalingPort: prefs.getInt(_kBackupPortKey) ?? 443,
             srtPort: prefs.getInt(_kBackupSrtPortKey) ?? _kDefaultSrtPort,
             isPrimary: false,
           )

@@ -57,7 +57,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         TextEditingController(text: config.primary.srtPort.toString());
     _backupHostCtrl = TextEditingController(text: config.backup?.host ?? '');
     _backupPortCtrl = TextEditingController(
-        text: (config.backup?.signalingPort ?? 3000).toString());
+        text: (config.backup?.signalingPort ?? 443).toString());
     _backupSrtPortCtrl = TextEditingController(
         text: (config.backup?.srtPort ?? 8890).toString());
     _backupEnabled = config.backupEnabled;
@@ -101,6 +101,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     final length = v?.trim().length ?? 0;
                     if (length < 10 || length > 79) {
                       return 'Use entre 10 e 79 caracteres (SRT)';
+                    }
+                    if (!RegExp(r'^[A-Za-z0-9._~-]+$').hasMatch(v!.trim())) {
+                      return 'Use apenas letras, números e . _ ~ -';
                     }
                     return null;
                   }),
@@ -148,7 +151,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                                 hostCtrl: _backupHostCtrl,
                                 portCtrl: _backupPortCtrl,
                                 srtPortCtrl: _backupSrtPortCtrl,
-                                hostHint: 'ex: 192.168.1.110 ou 10.0.0.5',
+                                hostHint: 'ex: backup.syncplayer.com.br',
                                 required: _backupEnabled,
                               ),
                             ],
@@ -188,14 +191,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       authSecret: _secretCtrl.text.trim(),
       primary: ServerEndpoint(
         host: _primaryHostCtrl.text.trim(),
-        signalingPort: int.tryParse(_primaryPortCtrl.text.trim()) ?? 3000,
+        signalingPort: int.tryParse(_primaryPortCtrl.text.trim()) ?? 443,
         srtPort: int.tryParse(_primarySrtPortCtrl.text.trim()) ?? 8890,
         isPrimary: true,
       ),
       backup: _backupEnabled && _backupHostCtrl.text.trim().isNotEmpty
           ? ServerEndpoint(
               host: _backupHostCtrl.text.trim(),
-              signalingPort: int.tryParse(_backupPortCtrl.text.trim()) ?? 3000,
+              signalingPort: int.tryParse(_backupPortCtrl.text.trim()) ?? 443,
               srtPort: int.tryParse(_backupSrtPortCtrl.text.trim()) ?? 8890,
               isPrimary: false,
             )
@@ -269,7 +272,7 @@ class _ServerFields extends StatelessWidget {
     required this.hostCtrl,
     required this.portCtrl,
     required this.srtPortCtrl,
-    this.hostHint = 'ex: 192.168.1.100',
+    this.hostHint = 'ex: spsmart.syncplayer.com.br',
     this.required = true,
   });
 
@@ -286,15 +289,13 @@ class _ServerFields extends StatelessWidget {
         TextFormField(
           controller: hostCtrl,
           decoration: InputDecoration(
-            labelText: 'IP / Hostname',
+            labelText: 'Hostname DNS',
             hintText: hostHint,
             border: const OutlineInputBorder(),
             isDense: true,
           ),
           keyboardType: TextInputType.url,
-          validator: required
-              ? (v) => (v == null || v.isEmpty) ? 'Obrigatório' : null
-              : null,
+          validator: required ? _validateHostname : null,
         ),
         const SizedBox(height: 8),
         Row(
@@ -303,8 +304,8 @@ class _ServerFields extends StatelessWidget {
               child: TextFormField(
                 controller: portCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Porta WS',
-                  hintText: '3000',
+                  labelText: 'Porta WSS',
+                  hintText: '443',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
@@ -338,6 +339,19 @@ class _ServerFields extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  static String? _validateHostname(String? value) {
+    final host = value?.trim() ?? '';
+    if (host.isEmpty) return 'Obrigatório';
+    final normalized = host.toLowerCase();
+    final validDns = RegExp(
+      r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$',
+    ).hasMatch(normalized);
+    if (!validDns || RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host)) {
+      return 'Informe um hostname DNS válido, não um IP';
+    }
+    return null;
   }
 }
 

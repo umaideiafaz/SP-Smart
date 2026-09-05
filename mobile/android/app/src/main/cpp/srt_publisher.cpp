@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <string>
 #include <cstring>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -197,18 +198,25 @@ SRTSOCKET createSocket(
     int connTimeout = 3000;
     srt_setsockopt(s, 0, SRTO_CONNTIMEO, &connTimeout, sizeof(connTimeout));
 
-    // Conecta ao destino
-    struct sockaddr_in sa{};
-    sa.sin_family = AF_INET;
-    sa.sin_port   = htons((uint16_t)port);
-    if (inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
-        LOGE("Invalid host address: %s", host);
+    // Resolve o hostname DNS no Android antes do srt_connect. AF_INET preserva
+    // o transporte IPv4 ja validado no hardware, sem exigir IP cru na UI.
+    struct addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    char portText[6]{};
+    std::snprintf(portText, sizeof(portText), "%d", port);
+    struct addrinfo* resolved = nullptr;
+    const int dnsResult = getaddrinfo(host, portText, &hints, &resolved);
+    if (dnsResult != 0 || resolved == nullptr) {
+        LOGE("SRT DNS resolution failed for %s: %s", host,
+             dnsResult == 0 ? "no address" : gai_strerror(dnsResult));
         srt_close(s);
         return kInvalidSock;
     }
 
     LOGI("Connecting SRT socket → %s:%d streamid=%s latency=%dms", host, port, streamKey, latencyMs);
-    int r = srt_connect(s, (struct sockaddr*)&sa, sizeof(sa));
+    int r = srt_connect(s, resolved->ai_addr, resolved->ai_addrlen);
+    freeaddrinfo(resolved);
     if (r == SRT_ERROR) {
         LOGE("srt_connect failed: %s", srt_getlasterror_str());
         srt_close(s);

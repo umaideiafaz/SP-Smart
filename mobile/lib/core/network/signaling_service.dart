@@ -198,8 +198,8 @@ class SignalingService {
     return selection;
   }
 
-  /// Primeira conexao TCP bem-sucedida vence. Como as sondagens partem juntas,
-  /// o primeiro SYN/ACK observado representa o menor RTT disponivel na sessao.
+  /// Resolve cada hostname explicitamente e dispara as conexoes TCP em paralelo.
+  /// A interface nunca precisa conhecer nem persistir os enderecos resolvidos.
   Future<RouteSelection> selectFastestEndpoint(
     List<ServerEndpoint> endpoints,
   ) async {
@@ -208,23 +208,13 @@ class SignalingService {
 
     for (final endpoint in endpoints) {
       unawaited(() async {
-        final stopwatch = Stopwatch()..start();
         try {
-          final socket = await Socket.connect(
-            endpoint.host,
-            endpoint.signalingPort,
-            timeout: const Duration(milliseconds: _kRouteProbeTimeoutMs),
-          );
-          stopwatch.stop();
-          socket.destroy();
+          final selection = await _probeResolvedEndpoint(endpoint);
           if (!winner.isCompleted) {
-            winner.complete(RouteSelection(
-              endpoint: endpoint,
-              rtt: stopwatch.elapsed,
-            ));
+            winner.complete(selection);
           }
         } catch (_) {
-          stopwatch.stop();
+          // A outra rota continua concorrendo.
         } finally {
           pending--;
           if (pending == 0 && !winner.isCompleted) {
@@ -237,6 +227,47 @@ class SignalingService {
     }
 
     return winner.future;
+  }
+
+  Future<RouteSelection> _probeResolvedEndpoint(ServerEndpoint endpoint) async {
+    final addresses = await InternetAddress.lookup(endpoint.host).timeout(
+      const Duration(milliseconds: _kRouteProbeTimeoutMs),
+    );
+    if (addresses.isEmpty) {
+      throw SocketException('DNS sem endereco para ${endpoint.host}');
+    }
+
+    final connected = Completer<RouteSelection>();
+    var pending = addresses.length;
+    for (final address in addresses) {
+      unawaited(() async {
+        final stopwatch = Stopwatch()..start();
+        try {
+          final socket = await Socket.connect(
+            address,
+            endpoint.signalingPort,
+            timeout: const Duration(milliseconds: _kRouteProbeTimeoutMs),
+          );
+          stopwatch.stop();
+          socket.destroy();
+          if (!connected.isCompleted) {
+            connected.complete(
+              RouteSelection(endpoint: endpoint, rtt: stopwatch.elapsed),
+            );
+          }
+        } catch (_) {
+          stopwatch.stop();
+        } finally {
+          pending--;
+          if (pending == 0 && !connected.isCompleted) {
+            connected.completeError(
+              SocketException('TCP indisponivel em ${endpoint.host}'),
+            );
+          }
+        }
+      }());
+    }
+    return connected.future;
   }
 
   void sendHello({
@@ -423,7 +454,7 @@ class SignalingService {
     // Ainda tem tentativas → backoff no mesmo nó
     _setState(SignalingState.reconnecting);
     _log.i(
-      'Tentativa $_reconnectAttempts/${_kMaxReconnectSameNode} em ${_reconnectDelayMs}ms...',
+      'Tentativa $_reconnectAttempts/$_kMaxReconnectSameNode em ${_reconnectDelayMs}ms...',
     );
 
     _reconnectTimer = Timer(Duration(milliseconds: _reconnectDelayMs), () {
@@ -511,12 +542,7 @@ class SignalingService {
   /// Sonda um endpoint via TCP (sem abrir WebSocket completo).
   Future<bool> _probeEndpoint(ServerEndpoint ep) async {
     try {
-      final socket = await Socket.connect(
-        ep.host,
-        ep.signalingPort,
-        timeout: const Duration(seconds: 3),
-      );
-      socket.destroy();
+      await _probeResolvedEndpoint(ep).timeout(const Duration(seconds: 3));
       return true;
     } catch (_) {
       return false;
