@@ -23,78 +23,32 @@ jobs:
 
     steps:
       - name: 🛎️ Checkout do Repositório
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive 
 
       - name: ☕ Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
-          # Removido o cache automático do Gradle para evitar o erro anterior
+          cache: 'gradle'
+          cache-dependency-path: |
+            mobile/android/*.gradle.kts
+            mobile/android/gradle/wrapper/gradle-wrapper.properties
 
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.2'
           channel: 'stable'
           cache: true
 
-      - name: 🛠️ Gerar Plataforma Android e Injetar C++
-        run: |
-          # 1. Pede pro Flutter gerar a base do Android do zero
-          flutter create --platforms=android .
-          
-          # 2. Configura CMake, NDK e OpenSSL no Kotlin DSL gerado pelo Flutter
-          cat << 'EOF' >> android/app/build.gradle.kts
-          
-          android {
-              ndkVersion = "28.2.13676358"
-              defaultConfig {
-                  externalNativeBuild {
-                      cmake {
-                          arguments += listOf("-DANDROID_STL=c++_shared")
-                      }
-                  }
-              }
-              buildFeatures {
-                  prefab = true
-              }
-              externalNativeBuild {
-                  cmake {
-                      path = file("src/main/cpp/CMakeLists.txt")
-                      version = "3.22.1"
-                  }
-              }
-          }
-          dependencies {
-              implementation("com.android.ndk.thirdparty:openssl:1.1.1q-beta-1")
-          }
-          EOF
-
-          # O flutter_webrtc 0.12.x ainda declara compileSdk 31 no próprio módulo.
-          # Mantemos a versão do plugin e elevamos somente o SDK de compilação da
-          # biblioteca; minSdk/targetSdk e o comportamento em runtime não mudam.
-          cat << 'EOF' >> android/build.gradle.kts
-
-          subprojects {
-              plugins.withId("com.android.library") {
-                  if (name == "flutter_webrtc") {
-                      extensions.configure<com.android.build.api.dsl.LibraryExtension> {
-                          compileSdk = 36
-                      }
-                  }
-              }
-          }
-          EOF
-          
-          # 3. Garante que o app roda em Android 9+, que tem suporte oficial pra H.265
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 28/g' android/app/build.gradle.kts
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 28/g' android/app/build.gradle.kts 2>/dev/null || true
-
       - name: 📦 Instalar Dependências (Pub Get)
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
+      - name: 🔎 Validar código Dart
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
 
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
         run: flutter build apk --${{ inputs.build_type }}

@@ -18,7 +18,7 @@ dependencies:
 
   # ── WebRTC (IFB / Video Return) ───────────────────────────
   # flutter_webrtc wraps libwebrtc natively (no browser dependency)
-  flutter_webrtc: ^0.12.5
+  flutter_webrtc: 0.12.12+hotfix.1
 
   # ── WebSocket (Signaling) ─────────────────────────────────
   web_socket_channel: ^3.0.1
