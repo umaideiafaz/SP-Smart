@@ -71,6 +71,22 @@ jobs:
               implementation("com.android.ndk.thirdparty:openssl:1.1.1q-beta-1")
           }
           EOF
+
+          # O flutter_webrtc 0.12.x ainda declara compileSdk 31 no próprio módulo.
+          # Mantemos a versão do plugin e elevamos somente o SDK de compilação da
+          # biblioteca; minSdk/targetSdk e o comportamento em runtime não mudam.
+          cat << 'EOF' >> android/build.gradle.kts
+
+          subprojects {
+              afterEvaluate {
+                  if (name == "flutter_webrtc") {
+                      extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+                          compileSdk = 36
+                      }
+                  }
+              }
+          }
+          EOF
           
           # 3. Garante que o app roda em Android 9+, que tem suporte oficial pra H.265
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 28/g' android/app/build.gradle.kts
