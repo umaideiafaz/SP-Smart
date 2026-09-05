@@ -13,6 +13,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ─────────────────────────────────────────────────────────────
 find_package(openssl REQUIRED CONFIG)
 
+# O Prefab exporta o pacote/targets em minúsculas, enquanto o CMake interno
+# da libsrt procura as variáveis genéricas SSL_*. Entrega os mesmos targets
+# já resolvidos à libsrt sem executar uma segunda descoberta de OpenSSL.
+get_target_property(OPENSSL_PREFAB_INCLUDE_DIR
+    openssl::crypto INTERFACE_INCLUDE_DIRECTORIES)
+set(USE_OPENSSL_PC    OFF CACHE BOOL "" FORCE)
+set(SSL_FOUND         TRUE)
+set(SSL_INCLUDE_DIRS  "${OPENSSL_PREFAB_INCLUDE_DIR}")
+set(SSL_LIBRARIES     openssl::crypto)
+
 # ─────────────────────────────────────────────────────────────
 # libsrt (compilada a partir do submodule third_party/srt/)
 #
@@ -31,7 +41,7 @@ set(ENABLE_STATIC       ON  CACHE BOOL "" FORCE)
 set(ENABLE_ENCRYPTION   ON  CACHE BOOL "" FORCE)  # DTLS/SRTP
 set(ENABLE_BONDING      OFF CACHE BOOL "" FORCE)  # Usamos nossa própria lógica
 
-# Usa OpenSSL do NDK prefab em vez de compilar mbedTLS
+# Usa OpenSSL do Prefab em vez de compilar outra implementação criptográfica
 set(USE_ENCLIB openssl CACHE STRING "" FORCE)
 
 # Desativa features não necessárias para reduzir tamanho do .so

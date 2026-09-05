@@ -45,23 +45,23 @@ jobs:
           # 1. Pede pro Flutter gerar a base do Android do zero
           flutter create --platforms=android .
           
-          # 2. Injeta as configurações do CMake, NDK e OpenSSL direto no final do arquivo
-          cat << 'EOF' >> android/app/build.gradle
+          # 2. Configura CMake, NDK e OpenSSL no Kotlin DSL gerado pelo Flutter
+          cat << 'EOF' >> android/app/build.gradle.kts
           
           android {
-              ndkVersion "25.1.8937393"
+              ndkVersion = "25.1.8937393"
               buildFeatures {
-                  prefab true
+                  prefab = true
               }
               externalNativeBuild {
                   cmake {
-                      path "src/main/cpp/CMakeLists.txt"
-                      version "3.22.1"
+                      path = file("src/main/cpp/CMakeLists.txt")
+                      version = "3.22.1"
                   }
               }
           }
           dependencies {
-              implementation "com.android.ndk.thirdparty:openssl:1.1.1q-beta-1"
+              implementation("com.android.ndk.thirdparty:openssl:1.1.1q-beta-1")
           }
           EOF
           
