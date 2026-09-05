@@ -1,0 +1,61 @@
+name: Build Android APK (SP Smart)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Tipo de Build (profile = telemetria/performance, release = final)'
+        required: true
+        default: 'profile'
+        type: choice
+        options:
+          - profile
+          - release
+
+jobs:
+  build_apk:
+    name: Compilar APK (${{ inputs.build_type }})
+    # Imagem Linux oficial do GitHub (já possui Android SDK/NDK embarcados)
+    runs-on: ubuntu-latest
+
+    # IMPORTANTE: O Flutter project está na subpasta 'mobile'
+    defaults:
+      run:
+        working-directory: ./mobile
+
+    steps:
+      - name: 🛎️ Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          # REQUISITO CRÍTICO FASE 4: Isso garante que o git faça clone recursivo
+          # baixando a libsrt em mobile/android/app/src/main/cpp/third_party/srt
+          submodules: recursive 
+
+      - name: ☕ Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle' # Acelera futuros builds fazendo cache das dependências do Gradle
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 📦 Instalar Dependências (Pub Get)
+        run: flutter pub get
+
+      - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
+        # Ao rodar, o CMake via build.gradle fará o build estático do C++ e libsrt
+        run: flutter build apk --${{ inputs.build_type }}
+
+      - name: 📤 Upload do Artifact (APK Final)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sp-smart-mobile-${{ inputs.build_type }}
+          # O actions/upload-artifact roda a partir da raiz do repositório,
+          # por isso precisamos incluir o prefixo 'mobile/' no caminho:
+          path: mobile/build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
+          retention-days: 7

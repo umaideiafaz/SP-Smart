@@ -1,0 +1,72 @@
+# ============================================================
+# MediaMTX Configuration — SP Smart Broadcast
+# ============================================================
+# Reference: https://github.com/bluenviron/mediamtx
+# ============================================================
+
+# ── API (used by Node.js server to query stream status) ───────
+api: yes
+apiAddress: :9997
+apiEncryption: no
+apiServerKey: ""
+apiServerCert: ""
+apiAllowOrigin: "*"
+apiTrustedProxies: []
+
+# ── Logging ───────────────────────────────────────────────────
+logLevel: info
+logDestinations: [stdout]
+logFile: ""
+
+# ── Network ───────────────────────────────────────────────────
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+udpMaxPayloadSize: 1472
+
+# ── RTSP (disabled — not used) ────────────────────────────────
+rtsp: no
+
+# ── RTMP (disabled — not used) ────────────────────────────────
+rtmp: no
+
+# ── HLS (disabled for production — enable for preview only) ──
+hls: no
+
+# ── WebRTC (disabled — handled by our Node.js server) ─────────
+webrtc: no
+
+# ── SRT — Primary Ingest Protocol ────────────────────────────
+srt: yes
+srtAddress: :8890
+
+# ── Paths — Stream Definitions ───────────────────────────────
+paths:
+  # Wildcard: any reporter can push to srt://<server>:8890?streamid=<key>
+  # The stream key format is: reporter-<uuid>
+  # MediaMTX will auto-create a path for each unique streamid.
+  "~^reporter-[a-zA-Z0-9_-]+$":
+    # Source: SRT publisher (the reporter app)
+    source: publisher
+
+    # Require a stream key that matches our pattern
+    publishUser: ""
+    publishPass: ""
+
+    # Readers: the studio playout system (vMix, OBS, etc.) reads via SRT
+    # Configure vMix to pull: srt://<server>:8890?streamid=read:reporter-<key>&mode=caller
+    readUser: ""
+    readPass: ""
+
+    # Optional: restream to NDI via ffmpeg hook (uncomment in production)
+    # runOnReady: >-
+    #   ffmpeg -i srt://localhost:8890?streamid=$MTX_PATH&mode=caller
+    #   -c:v copy -c:a copy
+    #   -f libndi_newtek "$NDI_SOURCE_NAME"
+    # runOnReadyRestart: yes
+
+    # Record streams locally for archive (optional)
+    record: no
+    # recordPath: ./recordings/$MTX_PATH/$SEGMENT_DATETIME_LOCAL
+    # recordFormat: fmp4
+    # recordSegmentDuration: 1h

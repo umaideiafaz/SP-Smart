@@ -1,0 +1,7 @@
+node_modules/
+dist/
+studio/src-tauri/target/
+**/target/
+mobile/build/
+mobile/.dart_tool/
+*.log

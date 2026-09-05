@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SP Smart Studio",
+  "version": "0.1.0",
+  "identifier": "com.sp-smart.studio",
+
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "title":           "SP Smart Studio",
+        "width":           1440,
+        "height":          900,
+        "minWidth":        1200,
+        "minHeight":       700,
+        "resizable":       true,
+        "fullscreen":      false,
+        "decorations":     true,
+        "transparent":     false,
+        "alwaysOnTop":     false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico"
+    ]
+  },
+
+  "plugins": {}
+}
