@@ -161,6 +161,7 @@ sealed class ServerMessage {
       'SERVER_BITRATE_CMD'  => ServerBitrateCommandMessage.fromJson(json),
       'SERVER_IFB_ANSWER'   => ServerIFBAnswerMessage.fromJson(json),
       'SERVER_ICE_CANDIDATE'=> ServerICECandidateMessage.fromJson(json),
+      'SERVER_IFB_HANGUP'   => ServerIFBHangupMessage.fromJson(json),
       'SERVER_ERROR'        => ServerErrorMessage.fromJson(json),
       'SERVER_PING'         => ServerPingMessage.fromJson(json),
       _                     => UnknownServerMessage(json),
@@ -250,6 +251,17 @@ final class ServerICECandidateMessage extends ServerMessage {
       ServerICECandidateMessage(
           reporterId: j['reporterId'] as String,
           candidate: j['candidate'] as Map<String, dynamic>);
+}
+
+final class ServerIFBHangupMessage extends ServerMessage {
+  final String reporterId;
+  final String? reason;
+  const ServerIFBHangupMessage({required this.reporterId, this.reason});
+  factory ServerIFBHangupMessage.fromJson(Map<String, dynamic> j) =>
+      ServerIFBHangupMessage(
+        reporterId: j['reporterId'] as String,
+        reason: j['reason'] as String?,
+      );
 }
 
 final class ServerErrorMessage extends ServerMessage {

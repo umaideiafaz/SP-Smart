@@ -118,8 +118,7 @@ class AppConfig {
 
 // ── Riverpod Notifier ────────────────────────────────────────
 
-// @riverpod
-class AppConfigNotifier extends _$AppConfigNotifier {
+class AppConfigNotifier extends AsyncNotifier<AppConfig> {
   @override
   Future<AppConfig> build() async {
     final prefs = await SharedPreferences.getInstance();

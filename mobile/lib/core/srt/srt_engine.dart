@@ -306,7 +306,6 @@ class SrtEngine {
   }
 }
 
-// @riverpod
 SrtEngine srtEngine(Ref ref) {
   final engine = SrtEngine();
   engine.initialize();
@@ -314,5 +313,5 @@ SrtEngine srtEngine(Ref ref) {
   return engine;
 }
 
-final srtEngineProvider = NotifierProvider<SrtEngine, SrtConnectionState>(SrtEngine.new);
+final srtEngineProvider = Provider<SrtEngine>(srtEngine);
 

@@ -555,12 +555,11 @@ class SignalingService {
   }
 }
 
-// @riverpod
 SignalingService signalingService(Ref ref) {
   final service = SignalingService(ref);
   ref.onDispose(service.dispose);
   return service;
 }
 
-final signalingServiceProvider = NotifierProvider<SignalingService, SignalingState>(SignalingService.new);
+final signalingServiceProvider = Provider<SignalingService>(signalingService);
 
