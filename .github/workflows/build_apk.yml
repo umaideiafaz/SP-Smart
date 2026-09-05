@@ -15,10 +15,8 @@ on:
 jobs:
   build_apk:
     name: Compilar APK (${{ inputs.build_type }})
-    # Imagem Linux oficial do GitHub (já possui Android SDK/NDK embarcados)
     runs-on: ubuntu-latest
 
-    # IMPORTANTE: O Flutter project está na subpasta 'mobile'
     defaults:
       run:
         working-directory: ./mobile
@@ -27,8 +25,6 @@ jobs:
       - name: 🛎️ Checkout do Repositório
         uses: actions/checkout@v4
         with:
-          # REQUISITO CRÍTICO FASE 4: Isso garante que o git faça clone recursivo
-          # baixando a libsrt em mobile/android/app/src/main/cpp/third_party/srt
           submodules: recursive 
 
       - name: ☕ Setup Java 17
@@ -36,7 +32,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-           # Acelera futuros builds fazendo cache das dependências do Gradle
+          # Removido o cache automático do Gradle para evitar o erro anterior
 
       - name: 🐦 Setup Flutter
         uses: subosito/flutter-action@v2
@@ -44,18 +40,43 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: 🛠️ Gerar Plataforma Android e Injetar C++
+        run: |
+          # 1. Pede pro Flutter gerar a base do Android do zero
+          flutter create --platforms=android .
+          
+          # 2. Injeta as configurações do CMake, NDK e OpenSSL direto no final do arquivo
+          cat << 'EOF' >> android/app/build.gradle
+          
+          android {
+              ndkVersion "25.1.8937393"
+              buildFeatures {
+                  prefab true
+              }
+              externalNativeBuild {
+                  cmake {
+                      path "src/main/cpp/CMakeLists.txt"
+                      version "3.22.1"
+                  }
+              }
+          }
+          dependencies {
+              implementation "com.android.ndk.thirdparty:openssl:1.1.1q-beta-1"
+          }
+          EOF
+          
+          # 3. Garante que o app roda em Android 9+, que tem suporte oficial pra H.265
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 28/g' android/app/build.gradle
+
       - name: 📦 Instalar Dependências (Pub Get)
         run: flutter pub get
 
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
-        # Ao rodar, o CMake via build.gradle fará o build estático do C++ e libsrt
         run: flutter build apk --${{ inputs.build_type }}
 
       - name: 📤 Upload do Artifact (APK Final)
         uses: actions/upload-artifact@v4
         with:
           name: sp-smart-mobile-${{ inputs.build_type }}
-          # O actions/upload-artifact roda a partir da raiz do repositório,
-          # por isso precisamos incluir o prefixo 'mobile/' no caminho:
           path: mobile/build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
           retention-days: 7
