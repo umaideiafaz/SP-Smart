@@ -66,11 +66,14 @@ jobs:
           EOF
           
           # 3. Garante que o app roda em Android 9+, que tem suporte oficial pra H.265
-          sed -i 's/minSdkVersion = flutter.minSdkVersion/minSdkVersion = 28/g' android/app/build.gradle.kts
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 28/g' android/app/build.gradle.kts
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 28/g' android/app/build.gradle.kts 2>/dev/null || true
 
       - name: 📦 Instalar Dependências (Pub Get)
         run: flutter pub get
+
+      - name: ⚙️ Gerar Códigos do Riverpod (build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
 
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
         run: flutter build apk --${{ inputs.build_type }}
@@ -81,4 +84,5 @@ jobs:
           name: sp-smart-mobile-${{ inputs.build_type }}
           path: mobile/build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
           retention-days: 7
+
 
