@@ -392,7 +392,7 @@ JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* /*vm*/, void* /*reserved*/) {
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT void JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeInit(
+Java_com_sp_1smart_srt_SrtPublisher_nativeInit(
     JNIEnv* env, jobject thiz)
 {
     SrtPublisher* pub = getOrCreatePublisher();
@@ -414,7 +414,7 @@ Java_com_sp_smart_srt_SrtPublisher_nativeInit(
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT jboolean JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeConnect(
+Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
     JNIEnv* env, jobject /*thiz*/,
     jstring host, jint port, jstring streamKey, jint latencyMs, jstring node)
 {
@@ -462,7 +462,7 @@ Java_com_sp_smart_srt_SrtPublisher_nativeConnect(
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT void JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeSendPacket(
+Java_com_sp_1smart_srt_SrtPublisher_nativeSendPacket(
     JNIEnv* env, jobject /*thiz*/,
     jbyteArray data, jint size, jlong /*pts*/)
 {
@@ -492,7 +492,7 @@ Java_com_sp_smart_srt_SrtPublisher_nativeSendPacket(
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT jboolean JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeSwitchDestination(
+Java_com_sp_1smart_srt_SrtPublisher_nativeSwitchDestination(
     JNIEnv* env, jobject /*thiz*/,
     jstring newHost, jint newPort, jstring newStreamKey, jint latencyMs, jstring newNode)
 {
@@ -522,7 +522,7 @@ Java_com_sp_smart_srt_SrtPublisher_nativeSwitchDestination(
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT void JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeDisconnect(
+Java_com_sp_1smart_srt_SrtPublisher_nativeDisconnect(
     JNIEnv* /*env*/, jobject /*thiz*/)
 {
     SrtPublisher* pub = getOrCreatePublisher();
@@ -542,7 +542,7 @@ Java_com_sp_smart_srt_SrtPublisher_nativeDisconnect(
 // ─────────────────────────────────────────────────────────────
 
 JNIEXPORT void JNICALL
-Java_com_sp_smart_srt_SrtPublisher_nativeSetTargetBitrate(
+Java_com_sp_1smart_srt_SrtPublisher_nativeSetTargetBitrate(
     JNIEnv* /*env*/, jobject /*thiz*/, jint bitrateKbps)
 {
     SrtPublisher* pub = getOrCreatePublisher();
