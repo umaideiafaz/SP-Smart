@@ -1,9 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-part 'app_config.g.dart';
 
 // ── Constants ──────────────────────────────────────────────────
 const _kWsPath = '/ws';
@@ -120,7 +118,7 @@ class AppConfig {
 
 // ── Riverpod Notifier ────────────────────────────────────────
 
-@riverpod
+// @riverpod
 class AppConfigNotifier extends _$AppConfigNotifier {
   @override
   Future<AppConfig> build() async {
@@ -184,3 +182,6 @@ class AppConfigNotifier extends _$AppConfigNotifier {
     state = AsyncValue.data(config);
   }
 }
+
+final appConfigNotifierProvider = AsyncNotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);
+

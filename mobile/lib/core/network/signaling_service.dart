@@ -25,14 +25,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:logger/logger.dart';
 import 'package:sp_smart/core/network/protocol.dart';
 import 'package:sp_smart/core/config/app_config.dart';
 
-part 'signaling_service.g.dart';
 
 // ── Estado da Conexão ────────────────────────────────────────
 enum SignalingState {
@@ -557,9 +555,12 @@ class SignalingService {
   }
 }
 
-@riverpod
+// @riverpod
 SignalingService signalingService(Ref ref) {
   final service = SignalingService(ref);
   ref.onDispose(service.dispose);
   return service;
 }
+
+final signalingServiceProvider = NotifierProvider<SignalingService, SignalingState>(SignalingService.new);
+

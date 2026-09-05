@@ -26,10 +26,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/network/signaling_service.dart';
 
-part 'ifb_service.g.dart';
 
 // ── Estado ────────────────────────────────────────────────────
 
@@ -82,7 +80,7 @@ final remoteVideoRendererProvider = Provider<RTCVideoRenderer>((ref) {
 // IFBService — Riverpod Notifier
 // ─────────────────────────────────────────────────────────────
 
-@riverpod
+// @riverpod
 class IFBService extends _$IFBService {
   RTCPeerConnection? _pc;
   StreamSubscription<dynamic>? _sigSub;
@@ -398,3 +396,6 @@ class IFBService extends _$IFBService {
     );
   }
 }
+
+final iFBServiceProvider = NotifierProvider<IFBService, IFBState>(IFBService.new);
+

@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import 'package:sp_smart/features/setup/presentation/setup_screen.dart';
 import 'package:sp_smart/features/broadcast/presentation/broadcast_screen.dart';
 import 'package:sp_smart/features/settings/presentation/settings_screen.dart';
 
-part 'app_router.g.dart';
 
 // ── Route names ───────────────────────────────────────────────
 abstract class Routes {
@@ -16,7 +14,7 @@ abstract class Routes {
   static const settings  = '/settings';
 }
 
-@riverpod
+// @riverpod
 GoRouter appRouter(Ref ref) {
   return GoRouter(
     initialLocation: Routes.setup,
@@ -49,3 +47,6 @@ GoRouter appRouter(Ref ref) {
     ),
   );
 }
+
+final appRouterProvider = Provider<GoRouter>(appRouter);
+

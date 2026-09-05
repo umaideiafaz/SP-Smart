@@ -12,9 +12,7 @@ library sp_smart_srt;
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-part 'srt_engine.g.dart';
 
 // ── Estados ───────────────────────────────────────────────────
 enum SrtConnectionState {
@@ -308,10 +306,13 @@ class SrtEngine {
   }
 }
 
-@riverpod
+// @riverpod
 SrtEngine srtEngine(Ref ref) {
   final engine = SrtEngine();
   engine.initialize();
   ref.onDispose(engine.dispose);
   return engine;
 }
+
+final srtEngineProvider = NotifierProvider<SrtEngine, SrtConnectionState>(SrtEngine.new);
+

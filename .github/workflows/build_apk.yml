@@ -72,8 +72,6 @@ jobs:
       - name: 📦 Instalar Dependências (Pub Get)
         run: flutter pub get
 
-      - name: ⚙️ Gerar Códigos do Riverpod (build_runner)
-        run: dart run build_runner build --delete-conflicting-outputs
 
       - name: 🔨 Compilar APK (NDK + C++ + Dart AOT)
         run: flutter build apk --${{ inputs.build_type }}
@@ -84,5 +82,3 @@ jobs:
           name: sp-smart-mobile-${{ inputs.build_type }}
           path: mobile/build/app/outputs/flutter-apk/app-${{ inputs.build_type }}.apk
           retention-days: 7
-
-
