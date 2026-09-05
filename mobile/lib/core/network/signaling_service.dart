@@ -147,6 +147,7 @@ class SignalingService {
   String _authSecret = '';
   String _srtStreamKey = '';
   Completer<void>? _authenticationCompleter;
+  FailoverEvent? _pendingFailoverEvent;
 
   // ── Último timestamp de pong recebido ────────────────────
   DateTime _lastPongAt = DateTime.now();
@@ -175,6 +176,7 @@ class SignalingService {
     _displayName = displayName;
     _authSecret = authSecret;
     _srtStreamKey = srtStreamKey;
+    _pendingFailoverEvent = null;
     _reconnectAttempts = 0;
     _reconnectDelayMs = _kReconnectInitialMs;
 
@@ -490,12 +492,12 @@ class SignalingService {
       _log.w(
           'FAILOVER EXECUTADO: ${fromNode.name} → ${toNode.name} (${activeEndpoint?.host})');
 
-      _failoverCtrl.add(FailoverEvent(
+      _pendingFailoverEvent = FailoverEvent(
         from: fromNode,
         to: toNode,
         reason: reason,
         occurredAt: DateTime.now(),
-      ));
+      );
 
       _nodeCtrl.add(toNode);
       _setState(SignalingState.connecting);
@@ -559,12 +561,12 @@ class SignalingService {
     _reconnectAttempts = 0;
     _reconnectDelayMs = _kReconnectInitialMs;
 
-    _failoverCtrl.add(FailoverEvent(
+    _pendingFailoverEvent = FailoverEvent(
       from: fromNode,
       to: ActiveNode.primary,
       reason: 'Primary recovery automático',
       occurredAt: DateTime.now(),
-    ));
+    );
 
     _nodeCtrl.add(ActiveNode.primary);
     _setState(SignalingState.connecting);
@@ -596,6 +598,11 @@ class SignalingService {
         _setState(SignalingState.connected);
         if (_authenticationCompleter?.isCompleted == false) {
           _authenticationCompleter!.complete();
+        }
+        final completedFailover = _pendingFailoverEvent;
+        _pendingFailoverEvent = null;
+        if (completedFailover != null) {
+          _failoverCtrl.add(completedFailover);
         }
         _startHeartbeat();
         if (activeNode == ActiveNode.backup) {

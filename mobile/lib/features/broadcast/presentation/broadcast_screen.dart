@@ -32,21 +32,22 @@ class BroadcastScreen extends ConsumerWidget {
     ref.listen<AsyncValue<FailoverEvent>>(failoverEventProvider, (_, next) {
       next.whenData((_) {
         final engine = ref.read(srtEngineProvider);
-        final endpoint = ref.read(signalingServiceProvider).activeEndpoint;
+        final signaling = ref.read(signalingServiceProvider);
+        final endpoint = signaling.activeEndpoint;
         if (config == null ||
             endpoint == null ||
             engine.currentDestination == null) {
           return;
         }
 
-        unawaited(engine.switchDestination(SrtDestination(
-          host: endpoint.host,
-          port: endpoint.srtPort,
-          streamKey: config.srtStreamKey,
-          passphrase: config.authSecret,
-          node:
-              endpoint.isPrimary ? SrtActiveNode.primary : SrtActiveNode.backup,
-        )));
+        final destination = _destinationFromWelcome(
+          signaling: signaling,
+          config: config,
+          endpoint: endpoint,
+        );
+        if (destination != null) {
+          unawaited(engine.switchDestination(destination));
+        }
       });
     });
 
@@ -300,7 +301,8 @@ class _GoLiveButton extends ConsumerWidget {
           await engine.disconnect();
         } else {
           final config = ref.read(appConfigNotifierProvider).valueOrNull;
-          final endpoint = ref.read(signalingServiceProvider).activeEndpoint;
+          final signaling = ref.read(signalingServiceProvider);
+          final endpoint = signaling.activeEndpoint;
           if (config == null || endpoint == null) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Nenhuma rota de servidor ativa')),
@@ -308,15 +310,17 @@ class _GoLiveButton extends ConsumerWidget {
             return;
           }
 
-          final dest = SrtDestination(
-            host: endpoint.host,
-            port: endpoint.srtPort,
-            streamKey: config.srtStreamKey,
-            passphrase: config.authSecret,
-            node: endpoint.isPrimary
-                ? SrtActiveNode.primary
-                : SrtActiveNode.backup,
+          final dest = _destinationFromWelcome(
+            signaling: signaling,
+            config: config,
+            endpoint: endpoint,
           );
+          if (dest == null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Destino SRT do servidor inválido')),
+            );
+            return;
+          }
           await engine.connect(dest);
         }
       },
@@ -346,6 +350,24 @@ class _GoLiveButton extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// O WSS pode estar no Cloudflare, mas o SRT precisa usar o DNS UDP direto
+/// anunciado pelo nó autenticado no SERVER_WELCOME.
+SrtDestination? _destinationFromWelcome({
+  required SignalingService signaling,
+  required AppConfig config,
+  required ServerEndpoint endpoint,
+}) {
+  final uri = Uri.tryParse(signaling.srtIngestUrl ?? '');
+  if (uri == null || uri.scheme != 'srt' || uri.host.isEmpty) return null;
+  return SrtDestination(
+    host: uri.host,
+    port: uri.port > 0 ? uri.port : endpoint.srtPort,
+    streamKey: uri.queryParameters['streamid'] ?? config.srtStreamKey,
+    passphrase: config.authSecret,
+    node: endpoint.isPrimary ? SrtActiveNode.primary : SrtActiveNode.backup,
+  );
 }
 
 class _IFBToggleButton extends ConsumerWidget {
