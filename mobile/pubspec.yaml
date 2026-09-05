@@ -57,7 +57,7 @@ dev_dependencies:
   freezed: ^2.5.8
   json_serializable: ^6.9.4
   riverpod_generator: ^2.4.4
-  custom_lint: ^0.7.5
+  custom_lint: ^0.7.3
   riverpod_lint: ^2.3.13
 
 flutter:
