@@ -55,6 +55,9 @@ set(ENABLE_INET_PTON    ON  CACHE BOOL "" FORCE)
 
 if(EXISTS "${SRT_SOURCE_DIR}/CMakeLists.txt")
     add_subdirectory(${SRT_SOURCE_DIR} ${SRT_BINARY_DIR})
+    # haicrypt é compilado dentro deste OBJECT library. Vincular o target
+    # Prefab aqui propaga os headers OpenSSL para os fontes C da libsrt.
+    target_link_libraries(srt_virtual PRIVATE openssl::crypto)
     set(SRT_FOUND TRUE)
     message(STATUS "SP Smart: libsrt submodule found and configured")
 else()
