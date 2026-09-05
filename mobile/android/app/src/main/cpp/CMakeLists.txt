@@ -33,6 +33,7 @@ set(SSL_LIBRARIES     openssl::crypto)
 # ─────────────────────────────────────────────────────────────
 
 set(SRT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/srt)
+set(SRT_BINARY_DIR ${CMAKE_BINARY_DIR}/srt_build)
 
 # Flags de compilação do libsrt para Android broadcast
 set(ENABLE_APPS         OFF CACHE BOOL "" FORCE)  # Sem executáveis
@@ -53,7 +54,7 @@ set(ENABLE_HEAVY_LOGGING OFF CACHE BOOL "" FORCE) # Verbose demais para release
 set(ENABLE_INET_PTON    ON  CACHE BOOL "" FORCE)
 
 if(EXISTS "${SRT_SOURCE_DIR}/CMakeLists.txt")
-    add_subdirectory(${SRT_SOURCE_DIR} ${CMAKE_BINARY_DIR}/srt_build)
+    add_subdirectory(${SRT_SOURCE_DIR} ${SRT_BINARY_DIR})
     set(SRT_FOUND TRUE)
     message(STATUS "SP Smart: libsrt submodule found and configured")
 else()
@@ -90,6 +91,7 @@ if(SRT_FOUND)
     target_include_directories(srt_jni PRIVATE
         ${SRT_SOURCE_DIR}/srtcore
         ${SRT_SOURCE_DIR}
+        ${SRT_BINARY_DIR}       # version.h gerado pela configuração da libsrt
     )
     target_link_libraries(
         srt_jni
