@@ -66,3 +66,6 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/audio/
+
+dependency_overrides:
+  analyzer: '<7.0.0'
