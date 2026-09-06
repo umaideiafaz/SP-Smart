@@ -129,6 +129,8 @@ class SrtPublisher(
         nativeDisconnect()
     }
 
+    fun switchCamera(): Boolean = cameraManager?.switchCamera() ?: false
+
     @Synchronized
     private fun stopPreview() {
         cameraManager?.close()

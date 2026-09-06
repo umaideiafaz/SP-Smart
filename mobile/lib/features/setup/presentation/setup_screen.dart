@@ -210,7 +210,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     try {
       await ref.read(appConfigNotifierProvider.notifier).save(updated);
 
-      final selection = await ref.read(signalingServiceProvider).connect(
+      await ref.read(signalingServiceProvider).connect(
             endpoints: updated.endpoints,
             reporterId: updated.reporterId,
             displayName: updated.displayName,
@@ -219,12 +219,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          'Rota: ${selection.endpoint.label} '
-          '(${selection.endpoint.host}) — RTT ${selection.rtt.inMilliseconds} ms',
-        ),
-      ));
       context.go(Routes.broadcast);
     } catch (error) {
       if (!mounted) return;

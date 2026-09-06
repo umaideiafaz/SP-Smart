@@ -11,6 +11,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sp_smart/core/config/app_config.dart';
@@ -386,16 +387,33 @@ class _LeftAudioRail extends StatelessWidget {
 class _ControlRail extends StatelessWidget {
   const _ControlRail();
 
+  static const _cameraChannel = MethodChannel('sp.smart/srt');
+
   @override
   Widget build(BuildContext context) => Container(
         color: Colors.black.withAlpha(190),
         child: Column(
           children: [
             const SizedBox(height: 12),
-            const Icon(
-              Icons.broadcast_on_personal,
+            IconButton(
+              tooltip: 'Virar câmera',
+              iconSize: 38,
               color: Colors.white,
-              size: 34,
+              onPressed: () async {
+                final switched = await _cameraChannel.invokeMethod<bool>(
+                      'switchCamera',
+                    ) ??
+                    false;
+                if (!switched && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      behavior: SnackBarBehavior.floating,
+                      content: Text('Não foi possível virar a câmera'),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.cameraswitch_outlined),
             ),
             const Spacer(),
             const _GoLiveButton(),

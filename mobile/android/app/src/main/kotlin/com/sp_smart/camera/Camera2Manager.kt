@@ -109,6 +109,42 @@ class Camera2Manager(
         return entry.id()
     }
 
+    /** Alterna entre as câmeras traseira e frontal sem recriar as Surfaces. */
+    fun switchCamera(): Boolean {
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val targetFacing = if (config.lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+            CameraCharacteristics.LENS_FACING_FRONT
+        } else {
+            CameraCharacteristics.LENS_FACING_BACK
+        }
+
+        val hasTargetCamera = manager.cameraIdList.any { id ->
+            manager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.LENS_FACING) == targetFacing
+        }
+        if (!hasTargetCamera) {
+            Log.w(TAG, "No camera available for lens facing $targetFacing")
+            return false
+        }
+
+        return try {
+            isRunning = false
+            captureSession?.stopRepeating()
+            captureSession?.close()
+            cameraDevice?.close()
+            captureSession = null
+            cameraDevice = null
+            captureRequest = null
+            config = config.copy(lensFacing = targetFacing)
+            openCameraInternal()
+            Log.i(TAG, "Switching camera to lens facing $targetFacing")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to switch camera", e)
+            false
+        }
+    }
+
     /**
      * Encerra a câmera e libera todos os recursos.
      */
