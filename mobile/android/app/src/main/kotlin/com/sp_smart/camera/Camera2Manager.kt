@@ -176,11 +176,20 @@ class Camera2Manager(
             Surface.ROTATION_270 -> 270
             else -> 0
         }
-        val relativeRotation = if (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+        val cameraRotation = if (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
             (sensorOrientation + displayDegrees) % 360
         } else {
             (sensorOrientation - displayDegrees + 360) % 360
         }
+        // Flutter ExternalTexture não aplica a matriz de transformação usada
+        // por TextureView/CameraX. No layout paisagem do SP Smart é necessário
+        // compensar o buffer Camera2 em mais 90 graus.
+        val relativeRotation = (cameraRotation + 90) % 360
+        Log.i(
+            TAG,
+            "Camera transform: sensor=$sensorOrientation display=$displayDegrees " +
+                "lens=${config.lensFacing} preview=$relativeRotation",
+        )
         return mapOf(
             "frontFacing" to (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT),
             "rotationDegrees" to relativeRotation,
