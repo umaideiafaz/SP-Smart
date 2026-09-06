@@ -400,11 +400,18 @@ class _ControlRail extends StatelessWidget {
               iconSize: 38,
               color: Colors.white,
               onPressed: () async {
-                final switched = await _cameraChannel.invokeMethod<bool>(
-                      'switchCamera',
-                    ) ??
-                    false;
-                if (!switched && context.mounted) {
+                try {
+                  final info = await _cameraChannel
+                      .invokeMapMethod<dynamic, dynamic>('switchCamera');
+                  if (info == null) {
+                    throw PlatformException(
+                      code: 'CAMERA_SWITCH_EMPTY',
+                      message: 'Camera switch returned no state',
+                    );
+                  }
+                  updateCameraPreviewTransform(info);
+                } on PlatformException {
+                  if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       behavior: SnackBarBehavior.floating,

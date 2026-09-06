@@ -9,6 +9,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+@immutable
+class CameraPreviewTransform {
+  const CameraPreviewTransform({
+    this.rotationDegrees = 0,
+    this.frontFacing = false,
+  });
+
+  final int rotationDegrees;
+  final bool frontFacing;
+}
+
+final cameraPreviewTransformNotifier = ValueNotifier(
+  const CameraPreviewTransform(),
+);
+
+void updateCameraPreviewTransform(Map<dynamic, dynamic>? info) {
+  if (info == null) return;
+  cameraPreviewTransformNotifier.value = CameraPreviewTransform(
+    rotationDegrees: (info['rotationDegrees'] as num?)?.toInt() ?? 0,
+    frontFacing: info['frontFacing'] == true,
+  );
+}
+
 class CameraPreviewWidget extends StatefulWidget {
   const CameraPreviewWidget({super.key});
 
@@ -72,6 +95,10 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
         'fps': 30,
         'bitrateKbps': 2000,
       });
+      final info = await _channel.invokeMapMethod<dynamic, dynamic>(
+        'getCameraInfo',
+      );
+      updateCameraPreviewTransform(info);
       if (mounted && id != null) {
         setState(() {
           _textureId = id;
@@ -117,15 +144,30 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
     }
 
     // Preview 16:9 preenchendo a operação em paisagem, com crop central.
-    return ClipRect(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
+    return ValueListenableBuilder<CameraPreviewTransform>(
+      valueListenable: cameraPreviewTransformNotifier,
+      builder: (context, transform, _) {
+        Widget texture = SizedBox(
           width: 1920,
           height: 1080,
           child: Texture(textureId: _textureId),
-        ),
-      ),
+        );
+        if (transform.frontFacing) {
+          texture = Transform.flip(
+            flipX: true,
+            child: texture,
+          );
+        }
+        return ClipRect(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: RotatedBox(
+              quarterTurns: (transform.rotationDegrees ~/ 90) % 4,
+              child: texture,
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -131,6 +131,11 @@ class SrtPublisher(
 
     fun switchCamera(): Boolean = cameraManager?.switchCamera() ?: false
 
+    fun cameraInfo(): Map<String, Any> = cameraManager?.cameraInfo() ?: mapOf(
+        "frontFacing" to false,
+        "rotationDegrees" to 0,
+    )
+
     @Synchronized
     private fun stopPreview() {
         cameraManager?.close()

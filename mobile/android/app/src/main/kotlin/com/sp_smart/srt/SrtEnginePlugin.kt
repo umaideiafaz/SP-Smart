@@ -59,7 +59,14 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "startPreview"       -> handleStartPreview(call, result)
-            "switchCamera"       -> result.success(publisher?.switchCamera() == true)
+            "getCameraInfo"      -> result.success(publisher?.cameraInfo())
+            "switchCamera"       -> {
+                if (publisher?.switchCamera() == true) {
+                    result.success(publisher?.cameraInfo())
+                } else {
+                    result.error("CAMERA_SWITCH_FAILED", "Camera switch rejected", null)
+                }
+            }
             "connect"            -> handleConnect(call, result)
             "disconnect"         -> handleDisconnect(result)
             "switchDestination"  -> handleSwitchDestination(call, result)

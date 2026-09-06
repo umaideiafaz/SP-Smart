@@ -12,6 +12,7 @@ import android.os.HandlerThread
 import android.util.Log
 import android.util.Range
 import android.view.Surface
+import android.view.WindowManager
 import io.flutter.view.TextureRegistry
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
@@ -67,6 +68,7 @@ class Camera2Manager(
 
     // ── Estado atual ─────────────────────────────────────────
     @Volatile private var isRunning = false
+    @Volatile private var isSwitchingCamera = false
 
     // ── Configurações ──────────────────────────────────────────
     data class CameraConfig(
@@ -110,7 +112,10 @@ class Camera2Manager(
     }
 
     /** Alterna entre as câmeras traseira e frontal sem recriar as Surfaces. */
+    @Synchronized
     fun switchCamera(): Boolean {
+        if (isSwitchingCamera) return true
+
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val targetFacing = if (config.lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
             CameraCharacteristics.LENS_FACING_FRONT
@@ -127,22 +132,59 @@ class Camera2Manager(
             return false
         }
 
-        return try {
+        isSwitchingCamera = true
+        config = config.copy(lensFacing = targetFacing)
+        cameraHandler.post {
             isRunning = false
-            captureSession?.stopRepeating()
-            captureSession?.close()
-            cameraDevice?.close()
-            captureSession = null
-            cameraDevice = null
-            captureRequest = null
-            config = config.copy(lensFacing = targetFacing)
-            openCameraInternal()
-            Log.i(TAG, "Switching camera to lens facing $targetFacing")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to switch camera", e)
-            false
+            try {
+                try {
+                    captureSession?.stopRepeating()
+                    captureSession?.abortCaptures()
+                } catch (e: CameraAccessException) {
+                    Log.w(TAG, "Capture session already stopping", e)
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Capture session already closed", e)
+                }
+                captureSession?.close()
+                cameraDevice?.close()
+                captureSession = null
+                cameraDevice = null
+                captureRequest = null
+                openCameraInternal()
+                Log.i(TAG, "Switching camera to lens facing $targetFacing")
+            } catch (e: Exception) {
+                isSwitchingCamera = false
+                Log.e(TAG, "Failed to switch camera", e)
+            }
         }
+        return true
+    }
+
+    fun cameraInfo(): Map<String, Any> {
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = selectCamera(manager, config.lensFacing)
+        val sensorOrientation = cameraId?.let {
+            manager.getCameraCharacteristics(it)
+                .get(CameraCharacteristics.SENSOR_ORIENTATION)
+        } ?: 0
+        @Suppress("DEPRECATION")
+        val displayRotation = (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+            .defaultDisplay.rotation
+        val displayDegrees = when (displayRotation) {
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+        val relativeRotation = if (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+            (sensorOrientation + displayDegrees) % 360
+        } else {
+            (sensorOrientation - displayDegrees + 360) % 360
+        }
+        return mapOf(
+            "frontFacing" to (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT),
+            "rotationDegrees" to relativeRotation,
+        )
     }
 
     /**
@@ -211,12 +253,14 @@ class Camera2Manager(
             }
             override fun onDisconnected(device: CameraDevice) {
                 cameraOpenLock.release()
+                isSwitchingCamera = false
                 device.close()
                 cameraDevice = null
                 Log.w(TAG, "Camera disconnected")
             }
             override fun onError(device: CameraDevice, error: Int) {
                 cameraOpenLock.release()
+                isSwitchingCamera = false
                 device.close()
                 cameraDevice = null
                 Log.e(TAG, "Camera error: $error")
@@ -238,10 +282,12 @@ class Camera2Manager(
         val stateCallback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
                 captureSession = session
+                isSwitchingCamera = false
                 Log.i(TAG, "Capture session configured (${surfaces.size} surfaces)")
                 startRepeatingRequest(device, session)
             }
             override fun onConfigureFailed(session: CameraCaptureSession) {
+                isSwitchingCamera = false
                 Log.e(TAG, "Capture session configuration failed")
             }
         }
