@@ -24,6 +24,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/io.dart';
@@ -148,6 +149,8 @@ class SignalingService {
   String _srtStreamKey = '';
   Completer<void>? _authenticationCompleter;
   FailoverEvent? _pendingFailoverEvent;
+  int _connectionGeneration = 0;
+  bool _handlingConnectionFailure = false;
 
   // ── Último timestamp de pong recebido ────────────────────
   DateTime _lastPongAt = DateTime.now();
@@ -169,6 +172,7 @@ class SignalingService {
       throw ArgumentError.value(endpoints, 'endpoints', 'Lista vazia');
     }
 
+    final generation = ++_connectionGeneration;
     _clearAllTimers();
     _closeChannel();
     _endpoints = endpoints;
@@ -180,7 +184,32 @@ class SignalingService {
     _reconnectAttempts = 0;
     _reconnectDelayMs = _kReconnectInitialMs;
 
-    final selection = await selectFastestEndpoint(endpoints);
+    var probeDelayMs = _kReconnectInitialMs;
+    RouteSelection? selection;
+    while (selection == null && generation == _connectionGeneration) {
+      try {
+        selection = await selectFastestEndpoint(endpoints);
+      } on SocketException catch (error) {
+        _setState(SignalingState.reconnecting);
+        _log.w(
+          'Nenhuma rota pública disponível: $error. '
+          'Nova corrida em ${probeDelayMs}ms.',
+        );
+        final jitter = Random().nextInt(max(1, probeDelayMs ~/ 4));
+        await Future<void>.delayed(
+          Duration(milliseconds: probeDelayMs + jitter),
+        );
+        probeDelayMs = (probeDelayMs * 2)
+            .clamp(
+              _kReconnectInitialMs,
+              _kReconnectMaxMs,
+            )
+            .toInt();
+      }
+    }
+    if (selection == null || generation != _connectionGeneration) {
+      throw StateError('Conexão cancelada');
+    }
     _activeIndex = _endpoints.indexOf(selection.endpoint);
     _nodeCtrl.add(activeNode);
     _authenticationCompleter = Completer<void>();
@@ -188,20 +217,17 @@ class SignalingService {
     _setState(SignalingState.connecting);
     await _doConnect(_endpoints[_activeIndex]);
 
-    try {
-      await _authenticationCompleter!.future.timeout(
-        const Duration(seconds: _kConnectTimeoutSec),
-      );
-    } on TimeoutException {
-      disconnect();
-      throw TimeoutException('Servidor nao confirmou a autenticacao');
-    }
+    // O primeiro handshake também participa da política de reconexão. Não há
+    // timeout fatal: queda de túnel/rede mantém a operação em backoff até o
+    // SERVER_WELCOME ou até disconnect() cancelar esta geração.
+    await _authenticationCompleter!.future;
 
     return selection;
   }
 
-  /// Resolve cada hostname explicitamente e dispara as conexoes TCP em paralelo.
-  /// A interface nunca precisa conhecer nem persistir os enderecos resolvidos.
+  /// Resolve cada hostname e disputa o /health de cada Tunnel em paralelo.
+  /// Medir só o TCP da borda Cloudflare gera falso positivo quando o origin
+  /// Termux está fora; este RTT inclui TLS, Tunnel e o processo Node.
   Future<RouteSelection> selectFastestEndpoint(
     List<ServerEndpoint> endpoints,
   ) async {
@@ -221,7 +247,7 @@ class SignalingService {
           pending--;
           if (pending == 0 && !winner.isCompleted) {
             winner.completeError(
-              const SocketException('Nenhum no respondeu a corrida TCP'),
+              const SocketException('Nenhuma rota WSS pública respondeu'),
             );
           }
         }
@@ -239,37 +265,69 @@ class SignalingService {
       throw SocketException('DNS sem endereco para ${endpoint.host}');
     }
 
-    final connected = Completer<RouteSelection>();
-    var pending = addresses.length;
-    for (final address in addresses) {
-      unawaited(() async {
-        final stopwatch = Stopwatch()..start();
-        try {
-          final socket = await Socket.connect(
-            address,
-            endpoint.signalingPort,
-            timeout: const Duration(milliseconds: _kRouteProbeTimeoutMs),
-          );
-          stopwatch.stop();
-          socket.destroy();
-          if (!connected.isCompleted) {
-            connected.complete(
-              RouteSelection(endpoint: endpoint, rtt: stopwatch.elapsed),
+    // Mantém suporte a nós locais/diagnóstico em porta alta. A rota pública
+    // Cloudflare (443) usa /health para validar também o origin.
+    if (endpoint.wsUri.port != 443) {
+      final connected = Completer<RouteSelection>();
+      var pending = addresses.length;
+      for (final address in addresses) {
+        unawaited(() async {
+          final stopwatch = Stopwatch()..start();
+          try {
+            final socket = await Socket.connect(
+              address,
+              endpoint.wsUri.port,
+              timeout: const Duration(milliseconds: _kRouteProbeTimeoutMs),
             );
+            stopwatch.stop();
+            socket.destroy();
+            if (!connected.isCompleted) {
+              connected.complete(
+                RouteSelection(endpoint: endpoint, rtt: stopwatch.elapsed),
+              );
+            }
+          } catch (_) {
+            stopwatch.stop();
+          } finally {
+            pending--;
+            if (pending == 0 && !connected.isCompleted) {
+              connected.completeError(
+                SocketException('TCP indisponível em ${endpoint.host}'),
+              );
+            }
           }
-        } catch (_) {
-          stopwatch.stop();
-        } finally {
-          pending--;
-          if (pending == 0 && !connected.isCompleted) {
-            connected.completeError(
-              SocketException('TCP indisponivel em ${endpoint.host}'),
-            );
-          }
-        }
-      }());
+        }());
+      }
+      return connected.future;
     }
-    return connected.future;
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: _kRouteProbeTimeoutMs)
+      ..userAgent = 'SP-Smart/health-race';
+    final stopwatch = Stopwatch()..start();
+    try {
+      final healthUri =
+          endpoint.wsUri.replace(scheme: 'https', path: '/health');
+      final request = await client.getUrl(healthUri).timeout(
+            const Duration(milliseconds: _kRouteProbeTimeoutMs),
+          );
+      request.headers
+          .set(HttpHeaders.authorizationHeader, 'Bearer $_authSecret');
+      final response = await request.close().timeout(
+            const Duration(milliseconds: _kRouteProbeTimeoutMs),
+          );
+      await response.drain<void>();
+      stopwatch.stop();
+      if (response.statusCode != HttpStatus.ok) {
+        throw HttpException(
+          'Health HTTP ${response.statusCode}',
+          uri: healthUri,
+        );
+      }
+      return RouteSelection(endpoint: endpoint, rtt: stopwatch.elapsed);
+    } finally {
+      client.close(force: true);
+    }
   }
 
   void sendHello({
@@ -342,6 +400,10 @@ class SignalingService {
   }
 
   void disconnect() {
+    _connectionGeneration++;
+    if (_authenticationCompleter?.isCompleted == false) {
+      _authenticationCompleter!.completeError(StateError('Conexão cancelada'));
+    }
     _clearAllTimers();
     _closeChannel();
     _setState(SignalingState.disconnected);
@@ -361,6 +423,7 @@ class SignalingService {
   // ─────────────────────────────────────────────────────────
 
   Future<void> _doConnect(ServerEndpoint endpoint) async {
+    _handlingConnectionFailure = false;
     _log.i('Conectando ao nó ${endpoint.label}: ${endpoint.wsUrl}');
     try {
       _channel = IOWebSocketChannel.connect(
@@ -445,6 +508,11 @@ class SignalingService {
   // ─────────────────────────────────────────────────────────
 
   void _handleConnectionFailure() {
+    if (_state == SignalingState.disconnected) return;
+    if (_handlingConnectionFailure) return;
+    _handlingConnectionFailure = true;
+    _reconnectTimer?.cancel();
+    _closeChannel();
     _reconnectAttempts++;
 
     // Esgotou tentativas no nó atual → tenta o próximo
@@ -616,8 +684,13 @@ class SignalingService {
 
       if (msg is ServerRejectMessage) {
         _log.w('Conexão rejeitada: ${msg.reason} (${msg.code})');
+        if (_authenticationCompleter?.isCompleted == false) {
+          _authenticationCompleter!.completeError(
+            StateError('Autenticação rejeitada: ${msg.code}'),
+          );
+        }
         // Rejeição do server → não retenta, vai direto para failover
-        _triggerFailover(reason: 'Server reject: ${msg.code}');
+        disconnect();
         return;
       }
 

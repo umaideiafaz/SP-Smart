@@ -41,10 +41,14 @@ class ServerEndpoint {
   ///
   /// A interface aceita somente DNS. Todo hostname usa TLS e precisa apresentar
   /// um certificado valido para o dominio informado.
+  /// Porta pública do cliente. 8080 é a porta do origin Termux e nunca deve
+  /// ser acessada diretamente através da Internet; o Tunnel termina TLS/443.
+  int get publicSignalingPort => signalingPort == 8080 ? 443 : signalingPort;
+
   Uri get wsUri => Uri(
         scheme: 'wss',
         host: host,
-        port: signalingPort,
+        port: publicSignalingPort,
         path: _kWsPath,
       );
 
@@ -69,7 +73,7 @@ class ServerEndpoint {
       );
 
   @override
-  String toString() => '$label [$host:$signalingPort | SRT:$srtPort]';
+  String toString() => '$label [$host:$publicSignalingPort | SRT:$srtPort]';
 }
 
 // ── App Configuration ─────────────────────────────────────────
@@ -145,7 +149,7 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
 
     final primary = ServerEndpoint(
       host: prefs.getString(_kPrimaryHostKey) ?? 'spsmart.syncplayer.com.br',
-      signalingPort: prefs.getInt(_kPrimaryPortKey) ?? 443,
+      signalingPort: _publicWsPort(prefs.getInt(_kPrimaryPortKey) ?? 443),
       srtPort: prefs.getInt(_kPrimarySrtPortKey) ?? _kDefaultSrtPort,
       isPrimary: true,
     );
@@ -154,7 +158,7 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
     final ServerEndpoint? backup = backupHost.isNotEmpty
         ? ServerEndpoint(
             host: backupHost,
-            signalingPort: prefs.getInt(_kBackupPortKey) ?? 443,
+            signalingPort: _publicWsPort(prefs.getInt(_kBackupPortKey) ?? 443),
             srtPort: prefs.getInt(_kBackupSrtPortKey) ?? _kDefaultSrtPort,
             isPrimary: false,
           )
@@ -172,24 +176,41 @@ class AppConfigNotifier extends AsyncNotifier<AppConfig> {
   }
 
   Future<void> save(AppConfig config) async {
+    final normalized = config.copyWith(
+      primary: config.primary.copyWith(
+        signalingPort: config.primary.publicSignalingPort,
+      ),
+      backup: config.backup?.copyWith(
+        signalingPort: config.backup!.publicSignalingPort,
+      ),
+    );
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kDisplayNameKey, config.displayName);
-    await prefs.setString(_kAuthSecretKey, config.authSecret);
-    await prefs.setString(_kSrtStreamKeyKey, config.srtStreamKey);
+    await prefs.setString(_kDisplayNameKey, normalized.displayName);
+    await prefs.setString(_kAuthSecretKey, normalized.authSecret);
+    await prefs.setString(_kSrtStreamKeyKey, normalized.srtStreamKey);
     // Primary
-    await prefs.setString(_kPrimaryHostKey, config.primary.host);
-    await prefs.setInt(_kPrimaryPortKey, config.primary.signalingPort);
-    await prefs.setInt(_kPrimarySrtPortKey, config.primary.srtPort);
+    await prefs.setString(_kPrimaryHostKey, normalized.primary.host);
+    await prefs.setInt(
+      _kPrimaryPortKey,
+      normalized.primary.publicSignalingPort,
+    );
+    await prefs.setInt(_kPrimarySrtPortKey, normalized.primary.srtPort);
     // Backup
-    if (config.backup != null) {
-      await prefs.setString(_kBackupHostKey, config.backup!.host);
-      await prefs.setInt(_kBackupPortKey, config.backup!.signalingPort);
-      await prefs.setInt(_kBackupSrtPortKey, config.backup!.srtPort);
+    if (normalized.backup != null) {
+      await prefs.setString(_kBackupHostKey, normalized.backup!.host);
+      await prefs.setInt(
+        _kBackupPortKey,
+        normalized.backup!.publicSignalingPort,
+      );
+      await prefs.setInt(_kBackupSrtPortKey, normalized.backup!.srtPort);
     }
-    await prefs.setBool(_kBackupEnabledKey, config.backupEnabled);
-    state = AsyncValue.data(config);
+    await prefs.setBool(_kBackupEnabledKey, normalized.backupEnabled);
+    state = AsyncValue.data(normalized);
   }
 }
+
+int _publicWsPort(int persistedPort) =>
+    persistedPort == 8080 ? 443 : persistedPort;
 
 final appConfigNotifierProvider =
     AsyncNotifierProvider<AppConfigNotifier, AppConfig>(AppConfigNotifier.new);

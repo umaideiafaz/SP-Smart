@@ -2,6 +2,7 @@ package com.sp_smart.srt
 
 import android.content.Context
 import android.util.Log
+import com.sp_smart.audio.AudioInputManager
 import com.sp_smart.camera.Camera2Manager
 import com.sp_smart.camera.H265Encoder
 import io.flutter.view.TextureRegistry
@@ -36,6 +37,7 @@ class SrtPublisher(
 
     private var cameraManager: Camera2Manager? = null
     private var encoder: H265Encoder? = null
+    private var audioInput: AudioInputManager? = null
     
     // ID da textura Flutter para a UI (BroadcastScreen)
     var textureId: Long = -1L
@@ -89,6 +91,14 @@ class SrtPublisher(
                 frameRate = fps,
             )
             textureId = cameraManager?.open(config, surface) ?: -1L
+            if (textureId >= 0L) {
+                audioInput = AudioInputManager(
+                    context,
+                    onEventCallback,
+                ) { data, size, pts ->
+                    nativeSendAudioPacket(data, size, pts)
+                }.also { it.start() }
+            }
             textureId
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start camera preview", e)
@@ -129,15 +139,34 @@ class SrtPublisher(
         nativeDisconnect()
     }
 
-    fun switchCamera(): Boolean = cameraManager?.switchCamera() ?: false
+    fun switchCamera(onComplete: (Result<Map<String, Any>>) -> Unit) {
+        val manager = cameraManager
+        if (manager == null) {
+            onComplete(Result.failure(IllegalStateException("Camera preview is not running")))
+            return
+        }
+        manager.switchCamera(onComplete)
+    }
 
     fun cameraInfo(): Map<String, Any> = cameraManager?.cameraInfo() ?: mapOf(
         "frontFacing" to false,
         "rotationDegrees" to 0,
     )
 
+    fun setAudioMuted(muted: Boolean) = audioInput?.setMuted(muted)
+
+    fun setMicrophoneGain(gain: Float) = audioInput?.setGain(gain)
+
+    fun selectMicrophoneSource(source: String): Boolean =
+        audioInput?.selectSource(source) ?: false
+
+    fun availableMicrophoneSources(): List<Map<String, Any>> =
+        audioInput?.availableSources() ?: emptyList()
+
     @Synchronized
     private fun stopPreview() {
+        audioInput?.stop()
+        audioInput = null
         cameraManager?.close()
         cameraManager = null
 
@@ -176,5 +205,6 @@ class SrtPublisher(
     ): Boolean
     external fun nativeDisconnect()
     external fun nativeSendPacket(data: ByteArray, size: Int, pts: Long)
+    external fun nativeSendAudioPacket(data: ByteArray, size: Int, pts: Long)
     external fun nativeSetTargetBitrate(bitrateKbps: Int)
 }

@@ -51,13 +51,14 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     _nameCtrl = TextEditingController(text: config.displayName);
     _secretCtrl = TextEditingController(text: config.authSecret);
     _primaryHostCtrl = TextEditingController(text: config.primary.host);
-    _primaryPortCtrl =
-        TextEditingController(text: config.primary.signalingPort.toString());
+    _primaryPortCtrl = TextEditingController(
+      text: config.primary.publicSignalingPort.toString(),
+    );
     _primarySrtPortCtrl =
         TextEditingController(text: config.primary.srtPort.toString());
     _backupHostCtrl = TextEditingController(text: config.backup?.host ?? '');
     _backupPortCtrl = TextEditingController(
-        text: (config.backup?.signalingPort ?? 443).toString());
+        text: (config.backup?.publicSignalingPort ?? 443).toString());
     _backupSrtPortCtrl = TextEditingController(
         text: (config.backup?.srtPort ?? 8890).toString());
     _backupEnabled = config.backupEnabled;

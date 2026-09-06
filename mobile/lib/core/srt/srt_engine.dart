@@ -96,6 +96,30 @@ class SrtStats {
       'rtt=${rttMs}ms | loss=${packetLossPercent.toStringAsFixed(2)}%)';
 }
 
+class AudioLevels {
+  final double left;
+  final double right;
+  final bool muted;
+  final double gain;
+  final String source;
+
+  const AudioLevels({
+    required this.left,
+    required this.right,
+    required this.muted,
+    required this.gain,
+    required this.source,
+  });
+
+  factory AudioLevels.fromMap(Map<dynamic, dynamic> map) => AudioLevels(
+        left: (map['left'] as num?)?.toDouble().clamp(0, 1).toDouble() ?? 0,
+        right: (map['right'] as num?)?.toDouble().clamp(0, 1).toDouble() ?? 0,
+        muted: map['muted'] as bool? ?? false,
+        gain: (map['gain'] as num?)?.toDouble() ?? 1,
+        source: map['source'] as String? ?? 'default',
+      );
+}
+
 // ─────────────────────────────────────────────────────────────
 // SrtEngine
 // ─────────────────────────────────────────────────────────────
@@ -135,9 +159,11 @@ class SrtEngine {
   final _stateCtrl = StreamController<SrtConnectionState>.broadcast();
   final _statsCtrl = StreamController<SrtStats>.broadcast();
   final _switchCtrl = StreamController<SrtDestination>.broadcast();
+  final _audioLevelsCtrl = StreamController<AudioLevels>.broadcast();
 
   Stream<SrtConnectionState> get stateStream => _stateCtrl.stream;
   Stream<SrtStats> get statsStream => _statsCtrl.stream;
+  Stream<AudioLevels> get audioLevelsStream => _audioLevelsCtrl.stream;
 
   /// Emite cada vez que switchDestination completa com sucesso.
   Stream<SrtDestination> get switchStream => _switchCtrl.stream;
@@ -239,6 +265,33 @@ class SrtEngine {
     }
   }
 
+  Future<void> setAudioMuted(bool muted) => _methodChannel.invokeMethod<void>(
+        'setAudioMuted',
+        {'muted': muted},
+      );
+
+  Future<void> setMicrophoneGain(double gain) =>
+      _methodChannel.invokeMethod<void>(
+        'setMicrophoneGain',
+        {'gain': gain.clamp(0.0, 2.0)},
+      );
+
+  Future<void> selectMicrophoneSource(String source) =>
+      _methodChannel.invokeMethod<void>(
+        'selectMicrophoneSource',
+        {'source': source},
+      );
+
+  Future<List<Map<String, dynamic>>> getMicrophoneSources() async {
+    final raw = await _methodChannel.invokeListMethod<dynamic>(
+      'getMicrophoneSources',
+    );
+    return (raw ?? const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
   /// Snapshot instantâneo de estatísticas SRT.
   Future<SrtStats?> getStats() async {
     try {
@@ -265,6 +318,9 @@ class SrtEngine {
 
       case 'stats':
         _statsCtrl.add(SrtStats.fromMap(event));
+
+      case 'audio_levels':
+        _audioLevelsCtrl.add(AudioLevels.fromMap(event));
 
       case 'switch_complete':
         // Nativo confirma que a troca foi bem-sucedida
@@ -310,6 +366,7 @@ class SrtEngine {
     _stateCtrl.close();
     _statsCtrl.close();
     _switchCtrl.close();
+    _audioLevelsCtrl.close();
   }
 }
 

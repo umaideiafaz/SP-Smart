@@ -1,6 +1,8 @@
 package com.sp_smart.srt
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -21,6 +23,7 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
     
     private lateinit var context: Context
     private lateinit var textureRegistry: TextureRegistry
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Instância real do orquestrador
     private var publisher: SrtPublisher? = null
@@ -61,16 +64,49 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
             "startPreview"       -> handleStartPreview(call, result)
             "getCameraInfo"      -> result.success(publisher?.cameraInfo())
             "switchCamera"       -> {
-                if (publisher?.switchCamera() == true) {
-                    result.success(publisher?.cameraInfo())
-                } else {
-                    result.error("CAMERA_SWITCH_FAILED", "Camera switch rejected", null)
+                val activePublisher = publisher
+                if (activePublisher == null) {
+                    result.error("CAMERA_SWITCH_FAILED", "Camera publisher unavailable", null)
+                    return
+                }
+                activePublisher.switchCamera { outcome ->
+                    mainHandler.post {
+                        outcome.fold(
+                            onSuccess = result::success,
+                            onFailure = { error ->
+                                result.error(
+                                    "CAMERA_SWITCH_FAILED",
+                                    error.message ?: "Camera switch failed",
+                                    null,
+                                )
+                            },
+                        )
+                    }
                 }
             }
             "connect"            -> handleConnect(call, result)
             "disconnect"         -> handleDisconnect(result)
             "switchDestination"  -> handleSwitchDestination(call, result)
             "setTargetBitrate"   -> handleSetBitrate(call, result)
+            "setAudioMuted"      -> {
+                publisher?.setAudioMuted(call.argument<Boolean>("muted") ?: false)
+                result.success(null)
+            }
+            "setMicrophoneGain"  -> {
+                publisher?.setMicrophoneGain(
+                    (call.argument<Double>("gain") ?: 1.0).toFloat(),
+                )
+                result.success(null)
+            }
+            "selectMicrophoneSource" -> {
+                val source = call.argument<String>("source") ?: "default"
+                if (publisher?.selectMicrophoneSource(source) == true) {
+                    result.success(null)
+                } else {
+                    result.error("AUDIO_SOURCE_UNAVAILABLE", "Microphone source unavailable", null)
+                }
+            }
+            "getMicrophoneSources" -> result.success(publisher?.availableMicrophoneSources())
             "getTextureId"       -> result.success(publisher?.textureId ?: -1L)
             else                 -> result.notImplemented()
         }
@@ -164,7 +200,7 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
     override fun onCancel(arguments: Any?) { eventSink = null }
 
     private fun sendEvent(data: Map<String, Any?>) {
-        eventSink?.success(data)
+        mainHandler.post { eventSink?.success(data) }
     }
 
     private fun handleNativeEvent(eventType: String, jsonString: String) {

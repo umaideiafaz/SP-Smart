@@ -40,6 +40,9 @@
 #include <cstdio>
 #include <string>
 #include <cstring>
+#include <vector>
+#include <array>
+#include <algorithm>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -99,6 +102,12 @@ struct SrtPublisher {
     std::string currentStreamKey;
     int         currentLatencyMs{120};
     std::string currentNode{"primary"};
+
+    // MPEG-TS é compartilhado pelas threads de saída dos MediaCodec H.265/AAC.
+    std::mutex muxMtx;
+    std::array<uint8_t, 8192> continuity{};
+    std::vector<uint8_t> tsPayload;
+    int64_t lastTablesPts{-1};
 
     ~SrtPublisher() { cleanup(); }
 
@@ -225,6 +234,216 @@ SRTSOCKET createSocket(
 
     LOGI("SRT socket connected (%s:%d)", host, port);
     return s;
+}
+
+// ─────────────────────────────────────────────────────────────
+// MPEG-TS mux mínimo: HEVC + AAC-LC
+// ─────────────────────────────────────────────────────────────
+
+static constexpr uint16_t kPmtPid = 0x1000;
+static constexpr uint16_t kVideoPid = 0x0100;
+static constexpr uint16_t kAudioPid = 0x0101;
+static constexpr size_t kTsPacketSize = 188;
+static constexpr size_t kSrtPayloadSize = 1316; // 7 pacotes TS
+
+uint32_t mpegCrc32(const uint8_t* data, size_t size) {
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < size; ++i) {
+        crc ^= static_cast<uint32_t>(data[i]) << 24;
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc & 0x80000000u) ? (crc << 1) ^ 0x04C11DB7u : crc << 1;
+        }
+    }
+    return crc;
+}
+
+void appendSectionPacket(
+    SrtPublisher* pub,
+    uint16_t pid,
+    const std::vector<uint8_t>& section
+) {
+    std::array<uint8_t, kTsPacketSize> packet{};
+    packet.fill(0xFF);
+    uint8_t& cc = pub->continuity[pid];
+    packet[0] = 0x47;
+    packet[1] = static_cast<uint8_t>(0x40 | ((pid >> 8) & 0x1F));
+    packet[2] = static_cast<uint8_t>(pid & 0xFF);
+    packet[3] = static_cast<uint8_t>(0x10 | (cc++ & 0x0F));
+    packet[4] = 0x00; // pointer_field
+    std::copy(section.begin(), section.end(), packet.begin() + 5);
+    pub->tsPayload.insert(pub->tsPayload.end(), packet.begin(), packet.end());
+}
+
+std::vector<uint8_t> withCrc(std::vector<uint8_t> section) {
+    const uint32_t crc = mpegCrc32(section.data(), section.size());
+    section.push_back(static_cast<uint8_t>(crc >> 24));
+    section.push_back(static_cast<uint8_t>(crc >> 16));
+    section.push_back(static_cast<uint8_t>(crc >> 8));
+    section.push_back(static_cast<uint8_t>(crc));
+    return section;
+}
+
+void appendProgramTables(SrtPublisher* pub) {
+    const auto pat = withCrc({
+        0x00, 0xB0, 0x0D, // PAT, section_length=13
+        0x00, 0x01,       // transport_stream_id
+        0xC1, 0x00, 0x00, // version/current, section numbers
+        0x00, 0x01,       // program_number
+        static_cast<uint8_t>(0xE0 | (kPmtPid >> 8)),
+        static_cast<uint8_t>(kPmtPid),
+    });
+    appendSectionPacket(pub, 0x0000, pat);
+
+    const auto pmt = withCrc({
+        0x02, 0xB0, 0x17, // PMT, section_length=23
+        0x00, 0x01,       // program_number
+        0xC1, 0x00, 0x00,
+        static_cast<uint8_t>(0xE0 | (kVideoPid >> 8)),
+        static_cast<uint8_t>(kVideoPid), // PCR_PID
+        0xF0, 0x00,                  // program_info_length
+        0x24,                        // HEVC stream_type
+        static_cast<uint8_t>(0xE0 | (kVideoPid >> 8)),
+        static_cast<uint8_t>(kVideoPid),
+        0xF0, 0x00,
+        0x0F,                        // AAC ADTS stream_type
+        static_cast<uint8_t>(0xE0 | (kAudioPid >> 8)),
+        static_cast<uint8_t>(kAudioPid),
+        0xF0, 0x00,
+    });
+    appendSectionPacket(pub, kPmtPid, pmt);
+}
+
+void appendPts(std::vector<uint8_t>& pes, int64_t pts90k) {
+    const uint64_t pts = static_cast<uint64_t>(pts90k) & 0x1FFFFFFFFULL;
+    pes.push_back(static_cast<uint8_t>(0x21 | ((pts >> 29) & 0x0E)));
+    pes.push_back(static_cast<uint8_t>(pts >> 22));
+    pes.push_back(static_cast<uint8_t>(0x01 | ((pts >> 14) & 0xFE)));
+    pes.push_back(static_cast<uint8_t>(pts >> 7));
+    pes.push_back(static_cast<uint8_t>(0x01 | ((pts << 1) & 0xFE)));
+}
+
+void appendPesPackets(
+    SrtPublisher* pub,
+    uint16_t pid,
+    uint8_t streamId,
+    const uint8_t* payload,
+    size_t payloadSize,
+    int64_t pts90k,
+    bool includePcr
+) {
+    std::vector<uint8_t> pes;
+    pes.reserve(payloadSize + 14);
+    pes.insert(pes.end(), {0x00, 0x00, 0x01, streamId});
+    const size_t length = payloadSize + 8;
+    const uint16_t pesLength = streamId == 0xE0 || length > 0xFFFF
+        ? 0
+        : static_cast<uint16_t>(length);
+    pes.push_back(static_cast<uint8_t>(pesLength >> 8));
+    pes.push_back(static_cast<uint8_t>(pesLength));
+    pes.insert(pes.end(), {0x80, 0x80, 0x05});
+    appendPts(pes, pts90k);
+    pes.insert(pes.end(), payload, payload + payloadSize);
+
+    size_t offset = 0;
+    bool first = true;
+    while (offset < pes.size()) {
+        std::array<uint8_t, kTsPacketSize> packet{};
+        packet.fill(0xFF);
+        uint8_t& cc = pub->continuity[pid];
+        packet[0] = 0x47;
+        packet[1] = static_cast<uint8_t>(
+            (first ? 0x40 : 0x00) | ((pid >> 8) & 0x1F)
+        );
+        packet[2] = static_cast<uint8_t>(pid);
+
+        const bool writePcr = first && includePcr;
+        const size_t maxPayload = writePcr ? 176 : 184;
+        const size_t bytes = std::min(maxPayload, pes.size() - offset);
+        const bool adaptation = writePcr || bytes < 184;
+        size_t cursor = 4;
+
+        packet[3] = static_cast<uint8_t>(
+            (adaptation ? 0x30 : 0x10) | (cc++ & 0x0F)
+        );
+        if (adaptation) {
+            const size_t adaptationLength = 183 - bytes;
+            packet[cursor++] = static_cast<uint8_t>(adaptationLength);
+            if (adaptationLength > 0) {
+                packet[cursor++] = writePcr ? 0x10 : 0x00;
+                size_t used = 1;
+                if (writePcr) {
+                    const uint64_t pcr = static_cast<uint64_t>(pts90k) & 0x1FFFFFFFFULL;
+                    packet[cursor++] = static_cast<uint8_t>(pcr >> 25);
+                    packet[cursor++] = static_cast<uint8_t>(pcr >> 17);
+                    packet[cursor++] = static_cast<uint8_t>(pcr >> 9);
+                    packet[cursor++] = static_cast<uint8_t>(pcr >> 1);
+                    packet[cursor++] = static_cast<uint8_t>((pcr & 1) << 7 | 0x7E);
+                    packet[cursor++] = 0x00;
+                    used += 6;
+                }
+                while (used++ < adaptationLength) packet[cursor++] = 0xFF;
+            }
+        }
+        std::copy(
+            pes.begin() + static_cast<std::ptrdiff_t>(offset),
+            pes.begin() + static_cast<std::ptrdiff_t>(offset + bytes),
+            packet.begin() + static_cast<std::ptrdiff_t>(cursor)
+        );
+        pub->tsPayload.insert(pub->tsPayload.end(), packet.begin(), packet.end());
+        offset += bytes;
+        first = false;
+    }
+}
+
+void flushTransportStream(SrtPublisher* pub, SRTSOCKET socket) {
+    while (pub->tsPayload.size() >= kSrtPayloadSize) {
+        SRT_MSGCTRL control = srt_msgctrl_default;
+        const int result = srt_sendmsg2(
+            socket,
+            reinterpret_cast<const char*>(pub->tsPayload.data()),
+            static_cast<int>(kSrtPayloadSize),
+            &control
+        );
+        if (result == SRT_ERROR) {
+            const int error = srt_getlasterror(nullptr);
+            if (error != SRT_ENOCONN && error != SRT_EASYNCRCV) {
+                LOGE("MPEG-TS send failed: %s", srt_getlasterror_str());
+            }
+            return;
+        }
+        pub->tsPayload.erase(
+            pub->tsPayload.begin(),
+            pub->tsPayload.begin() + static_cast<std::ptrdiff_t>(kSrtPayloadSize)
+        );
+    }
+}
+
+void muxAndSend(
+    SrtPublisher* pub,
+    const uint8_t* payload,
+    size_t payloadSize,
+    int64_t ptsUs,
+    bool video
+) {
+    const SRTSOCKET socket = pub->activeSock.load(std::memory_order_relaxed);
+    if (socket == kInvalidSock || !payload || payloadSize == 0) return;
+
+    const int64_t pts90k = std::max<int64_t>(0, ptsUs * 9 / 100);
+    std::lock_guard<std::mutex> lock(pub->muxMtx);
+    if (pub->lastTablesPts < 0 || pts90k - pub->lastTablesPts >= 45'000) {
+        appendProgramTables(pub);
+        pub->lastTablesPts = pts90k;
+    }
+    appendPesPackets(
+        pub,
+        video ? kVideoPid : kAudioPid,
+        video ? 0xE0 : 0xC0,
+        payload,
+        payloadSize,
+        pts90k,
+        video
+    );
+    flushTransportStream(pub, socket);
 }
 
 /**
@@ -361,6 +580,12 @@ void switchDestinationThread(
 
     // Troca atômica: todos os novos pacotes vão para pendingSock
     SRTSOCKET oldSock = pub->activeSock.exchange(pendingSock);
+    {
+        std::lock_guard<std::mutex> lock(pub->muxMtx);
+        pub->continuity.fill(0);
+        pub->tsPayload.clear();
+        pub->lastTablesPts = -1;
+    }
 
     // Atualiza destino atual
     pub->currentHost      = newHost;
@@ -476,10 +701,17 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
     }
 
     pub->activeSock.store(s);
+    {
+        std::lock_guard<std::mutex> lock(pub->muxMtx);
+        pub->continuity.fill(0);
+        pub->tsPayload.clear();
+        pub->lastTablesPts = -1;
+    }
     jniFireEvent(pub, "state_changed", "streaming");
 
     // Inicia thread de monitoramento se não estiver rodando
     if (!pub->running.load()) {
+        if (pub->monitorThread.joinable()) pub->monitorThread.join();
         pub->running.store(true);
         pub->monitorThread = std::thread(monitorLoop, pub);
     }
@@ -494,27 +726,41 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeConnect(
 JNIEXPORT void JNICALL
 Java_com_sp_1smart_srt_SrtPublisher_nativeSendPacket(
     JNIEnv* env, jobject /*thiz*/,
-    jbyteArray data, jint size, jlong /*pts*/)
+    jbyteArray data, jint size, jlong pts)
 {
     SrtPublisher* pub = getOrCreatePublisher();
-    SRTSOCKET s = pub->activeSock.load(std::memory_order_relaxed);
-    if (s == kInvalidSock) return;
+    if (pub->activeSock.load(std::memory_order_relaxed) == kInvalidSock) return;
 
     jbyte* buf = env->GetByteArrayElements(data, nullptr);
     if (!buf) return;
-
-    // srt_sendmsg2 é a API preferida para controle de timing
-    SRT_MSGCTRL mc = srt_msgctrl_default;
-    int r = srt_sendmsg2(s, reinterpret_cast<char*>(buf), size, &mc);
-
+    muxAndSend(
+        pub,
+        reinterpret_cast<const uint8_t*>(buf),
+        static_cast<size_t>(size),
+        static_cast<int64_t>(pts),
+        true
+    );
     env->ReleaseByteArrayElements(data, buf, JNI_ABORT);
+}
 
-    if (r == SRT_ERROR) {
-        int err = srt_getlasterror(nullptr);
-        if (err != SRT_ENOCONN && err != SRT_EASYNCRCV) {
-            LOGE("srt_sendmsg2 error: %s", srt_getlasterror_str());
-        }
-    }
+JNIEXPORT void JNICALL
+Java_com_sp_1smart_srt_SrtPublisher_nativeSendAudioPacket(
+    JNIEnv* env, jobject /*thiz*/,
+    jbyteArray data, jint size, jlong pts)
+{
+    SrtPublisher* pub = getOrCreatePublisher();
+    if (pub->activeSock.load(std::memory_order_relaxed) == kInvalidSock) return;
+
+    jbyte* buf = env->GetByteArrayElements(data, nullptr);
+    if (!buf) return;
+    muxAndSend(
+        pub,
+        reinterpret_cast<const uint8_t*>(buf),
+        static_cast<size_t>(size),
+        static_cast<int64_t>(pts),
+        false
+    );
+    env->ReleaseByteArrayElements(data, buf, JNI_ABORT);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -565,6 +811,11 @@ Java_com_sp_1smart_srt_SrtPublisher_nativeDisconnect(
     if (s != kInvalidSock) {
         srt_close(s);
         LOGI("SRT socket closed via nativeDisconnect");
+    }
+    {
+        std::lock_guard<std::mutex> lock(pub->muxMtx);
+        pub->tsPayload.clear();
+        pub->lastTablesPts = -1;
     }
 
     jniFireEvent(pub, "state_changed", "disconnected");

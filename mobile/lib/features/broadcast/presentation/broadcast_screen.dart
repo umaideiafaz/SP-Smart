@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sp_smart/core/config/app_config.dart';
 import 'package:sp_smart/core/network/protocol.dart';
 import 'package:sp_smart/core/router/app_router.dart';
@@ -348,39 +349,271 @@ class _VideoFormatHUD extends StatelessWidget {
       );
 }
 
-class _LeftAudioRail extends StatelessWidget {
+class _LeftAudioRail extends ConsumerStatefulWidget {
   const _LeftAudioRail({required this.reporterId});
   final String reporterId;
 
   @override
+  ConsumerState<_LeftAudioRail> createState() => _LeftAudioRailState();
+}
+
+class _LeftAudioRailState extends ConsumerState<_LeftAudioRail> {
+  bool _muted = false;
+  double _gain = 1;
+  String _source = 'default';
+
+  Future<void> _toggleMute() async {
+    final next = !_muted;
+    await ref.read(srtEngineProvider).setAudioMuted(next);
+    if (mounted) setState(() => _muted = next);
+  }
+
+  Future<void> _openMicrophonePanel() async {
+    final engine = ref.read(srtEngineProvider);
+    final sources = await engine.getMicrophoneSources();
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xEE171717),
+          title: const Text(
+            'Entrada de áudio',
+            style: TextStyle(color: Colors.white),
+          ),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final input in sources)
+                  ListTile(
+                    leading: Icon(
+                      _source == input['id']
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_off,
+                      color: _source == input['id']
+                          ? const Color(0xFF9ADB00)
+                          : Colors.white38,
+                    ),
+                    title: Text(
+                      _sourceLabel(input['id'] as String),
+                      style: TextStyle(
+                        color: input['available'] == true
+                            ? Colors.white
+                            : Colors.white38,
+                      ),
+                    ),
+                    onTap: input['available'] == true
+                        ? () async {
+                            final value = input['id'] as String;
+                            if (value == 'bluetooth') {
+                              final permission =
+                                  await Permission.bluetoothConnect.request();
+                              if (!permission.isGranted) return;
+                            }
+                            try {
+                              await engine.selectMicrophoneSource(value);
+                              if (!mounted) return;
+                              setState(() => _source = value);
+                              setDialogState(() {});
+                            } on PlatformException catch (error) {
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    error.message ??
+                                        'Fonte de microfone indisponível',
+                                  ),
+                                ),
+                              );
+                            }
+                          }
+                        : null,
+                  ),
+                const Divider(color: Colors.white24),
+                Row(
+                  children: [
+                    const Icon(Icons.mic, color: Colors.white70),
+                    Expanded(
+                      child: Slider(
+                        value: _gain,
+                        min: 0,
+                        max: 2,
+                        divisions: 40,
+                        activeColor: const Color(0xFF9ADB00),
+                        label: '${(_gain * 100).round()}%',
+                        onChanged: (value) {
+                          setState(() => _gain = value);
+                          setDialogState(() {});
+                          unawaited(engine.setMicrophoneGain(value));
+                        },
+                      ),
+                    ),
+                    SizedBox(
+                      width: 52,
+                      child: Text(
+                        '${(_gain * 100).round()}%',
+                        textAlign: TextAlign.end,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('FECHAR'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _sourceLabel(String id) => switch (id) {
+        'external' => 'Microfone externo / USB',
+        'bluetooth' => 'Bluetooth',
+        _ => 'Microfone padrão',
+      };
+
+  @override
   Widget build(BuildContext context) => Container(
         color: Colors.black.withAlpha(150),
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
         child: Column(
           children: [
-            _IFBToggleButton(reporterId: reporterId),
-            const Spacer(),
-            const Icon(Icons.graphic_eq, color: Color(0xFF9ADB00), size: 26),
-            const SizedBox(height: 4),
-            const Text(
-              'IFB',
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
+            _IFBToggleButton(reporterId: widget.reporterId),
+            IconButton(
+              tooltip: _muted ? 'Ativar microfone' : 'Silenciar microfone',
+              onPressed: _toggleMute,
+              icon: Icon(
+                _muted ? Icons.mic_off : Icons.mic,
+                color: _muted ? Colors.redAccent : Colors.white,
               ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              'L   R',
-              style: TextStyle(
-                color: Colors.white,
-                fontFamily: 'monospace',
-                fontSize: 14,
+            Expanded(
+              child: StreamBuilder<AudioLevels>(
+                stream: ref.read(srtEngineProvider).audioLevelsStream,
+                initialData: AudioLevels(
+                  left: 0,
+                  right: 0,
+                  muted: _muted,
+                  gain: _gain,
+                  source: _source,
+                ),
+                builder: (context, snapshot) {
+                  final levels = snapshot.data!;
+                  return _StereoMeter(
+                    left: levels.left,
+                    right: levels.right,
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: _openMicrophonePanel,
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.all(5),
+                child: Column(
+                  children: [
+                    const Icon(
+                      Icons.tune,
+                      color: Color(0xFF9ADB00),
+                      size: 20,
+                    ),
+                    Text(
+                      _source == 'default'
+                          ? 'MIC'
+                          : _source.substring(0, 3).toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
         ),
+      );
+}
+
+class _StereoMeter extends StatelessWidget {
+  const _StereoMeter({required this.left, required this.right});
+  final double left;
+  final double right;
+
+  @override
+  Widget build(BuildContext context) => Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _MeterChannel(label: 'L', level: left),
+          const SizedBox(width: 5),
+          _MeterChannel(label: 'R', level: right),
+        ],
+      );
+}
+
+class _MeterChannel extends StatelessWidget {
+  const _MeterChannel({required this.label, required this.level});
+  final String label;
+  final double level;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          Expanded(
+            child: Container(
+              width: 13,
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                border: Border.all(color: Colors.white24),
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) => Align(
+                  alignment: Alignment.bottomCenter,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 45),
+                    curve: Curves.linear,
+                    width: double.infinity,
+                    height: constraints.maxHeight * level.clamp(0, 1),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.bottomCenter,
+                        end: Alignment.topCenter,
+                        colors: [
+                          Color(0xFF55C500),
+                          Color(0xFF9ADB00),
+                          Color(0xFFFFC400),
+                          Color(0xFFFF3D00),
+                        ],
+                        stops: [0, .65, .85, 1],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
       );
 }
 

@@ -15,8 +15,6 @@ import android.view.Surface
 import android.view.WindowManager
 import io.flutter.view.TextureRegistry
 import java.util.concurrent.Executors
-import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
 
 /**
  * SP Smart — Camera2Manager
@@ -43,7 +41,6 @@ class Camera2Manager(
 ) {
     companion object {
         private const val TAG = "Camera2Manager"
-        private const val CAMERA_OPEN_TIMEOUT_SEC = 3L
     }
 
     // ── Flutter Texture (preview) ─────────────────────────────
@@ -64,11 +61,13 @@ class Camera2Manager(
     // ── Background thread ─────────────────────────────────────
     private val cameraThread  = HandlerThread("CameraThread").also { it.start() }
     private val cameraHandler = Handler(cameraThread.looper)
-    private val cameraOpenLock = Semaphore(1)
+    private val sessionExecutor = Executors.newSingleThreadExecutor()
+    private val closeCallbacks = mutableMapOf<CameraDevice, () -> Unit>()
 
     // ── Estado atual ─────────────────────────────────────────
     @Volatile private var isRunning = false
     @Volatile private var isSwitchingCamera = false
+    @Volatile private var isClosed = false
 
     // ── Configurações ──────────────────────────────────────────
     data class CameraConfig(
@@ -111,10 +110,23 @@ class Camera2Manager(
         return entry.id()
     }
 
-    /** Alterna entre as câmeras traseira e frontal sem recriar as Surfaces. */
+    /**
+     * Alterna a lente mantendo as Surfaces zero-copy.
+     *
+     * A conclusão só é entregue depois que a câmera anterior chamou onClosed
+     * e a nova sessão iniciou o repeating request. Isso impede duas CameraDevice
+     * concorrentes e elimina o falso sucesso que existia no MethodChannel.
+     */
     @Synchronized
-    fun switchCamera(): Boolean {
-        if (isSwitchingCamera) return true
+    fun switchCamera(onComplete: (Result<Map<String, Any>>) -> Unit) {
+        if (isClosed) {
+            onComplete(Result.failure(IllegalStateException("Camera manager closed")))
+            return
+        }
+        if (isSwitchingCamera) {
+            onComplete(Result.failure(IllegalStateException("Camera switch already running")))
+            return
+        }
 
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val targetFacing = if (config.lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
@@ -129,35 +141,38 @@ class Camera2Manager(
         }
         if (!hasTargetCamera) {
             Log.w(TAG, "No camera available for lens facing $targetFacing")
-            return false
+            onComplete(Result.failure(IllegalStateException("Requested lens is unavailable")))
+            return
         }
 
         isSwitchingCamera = true
-        config = config.copy(lensFacing = targetFacing)
-        cameraHandler.post {
-            isRunning = false
-            try {
-                try {
-                    captureSession?.stopRepeating()
-                    captureSession?.abortCaptures()
-                } catch (e: CameraAccessException) {
-                    Log.w(TAG, "Capture session already stopping", e)
-                } catch (e: IllegalStateException) {
-                    Log.w(TAG, "Capture session already closed", e)
-                }
-                captureSession?.close()
-                cameraDevice?.close()
-                captureSession = null
-                cameraDevice = null
-                captureRequest = null
-                openCameraInternal()
-                Log.i(TAG, "Switching camera to lens facing $targetFacing")
-            } catch (e: Exception) {
+        val previousConfig = config
+        val completeOnce = object {
+            var completed = false
+            @Synchronized
+            fun finish(result: Result<Map<String, Any>>) {
+                if (completed) return
+                completed = true
                 isSwitchingCamera = false
-                Log.e(TAG, "Failed to switch camera", e)
+                onComplete(result)
             }
         }
-        return true
+
+        cameraHandler.post {
+            closeCameraDevice {
+                config = previousConfig.copy(lensFacing = targetFacing)
+                Log.i(TAG, "Opening switched camera with lens facing $targetFacing")
+                openCameraInternal(
+                    onReady = { completeOnce.finish(Result.success(cameraInfo())) },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to switch camera; restoring previous lens", error)
+                        config = previousConfig
+                        openCameraInternal()
+                        completeOnce.finish(Result.failure(error))
+                    },
+                )
+            }
+        }
     }
 
     fun cameraInfo(): Map<String, Any> {
@@ -176,19 +191,14 @@ class Camera2Manager(
             Surface.ROTATION_270 -> 270
             else -> 0
         }
-        val cameraRotation = if (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
-            (sensorOrientation + displayDegrees) % 360
-        } else {
-            (sensorOrientation - displayDegrees + 360) % 360
-        }
-        // Flutter ExternalTexture não aplica a matriz de transformação usada
-        // por TextureView/CameraX. No layout paisagem do SP Smart é necessário
-        // compensar o buffer Camera2 em mais 90 graus.
-        val relativeRotation = (cameraRotation + 90) % 360
+        val isFront = config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
+        val sign = if (isFront) 1 else -1
+        val relativeRotation =
+            (sensorOrientation - displayDegrees * sign + 360) % 360
         Log.i(
             TAG,
             "Camera transform: sensor=$sensorOrientation display=$displayDegrees " +
-                "lens=${config.lensFacing} preview=$relativeRotation",
+                "lens=${config.lensFacing} previewClockwise=$relativeRotation",
         )
         return mapOf(
             "frontFacing" to (config.lensFacing == CameraCharacteristics.LENS_FACING_FRONT),
@@ -199,18 +209,21 @@ class Camera2Manager(
     /**
      * Encerra a câmera e libera todos os recursos.
      */
+    @Synchronized
     fun close() {
-        isRunning = false
-        captureSession?.stopRepeating()
-        captureSession?.close()
-        cameraDevice?.close()
-        previewSurface?.release()
-        textureEntry?.release()
-        captureSession = null
-        cameraDevice   = null
-        previewSurface = null
-        textureEntry   = null
-        Log.i(TAG, "Camera closed")
+        if (isClosed) return
+        isClosed = true
+        cameraHandler.post {
+            closeCameraDevice {
+                previewSurface?.release()
+                textureEntry?.release()
+                previewSurface = null
+                textureEntry = null
+                sessionExecutor.shutdown()
+                cameraThread.quitSafely()
+                Log.i(TAG, "Camera closed")
+            }
+        }
     }
 
     /**
@@ -242,62 +255,106 @@ class Camera2Manager(
     // Internos
     // ─────────────────────────────────────────────────────────
 
-    private fun openCameraInternal() {
+    private fun openCameraInternal(
+        onReady: (() -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null,
+    ) {
+        if (isClosed) {
+            onFailure?.invoke(IllegalStateException("Camera manager closed"))
+            return
+        }
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
         val cameraId = selectCamera(manager, config.lensFacing)
 
         if (cameraId == null) {
-            Log.e(TAG, "No camera found for lens facing ${config.lensFacing}")
+            val error = IllegalStateException("No camera found for lens facing ${config.lensFacing}")
+            Log.e(TAG, error.message, error)
+            onFailure?.invoke(error)
             return
         }
 
-        cameraOpenLock.tryAcquire(CAMERA_OPEN_TIMEOUT_SEC, TimeUnit.SECONDS)
-
-        manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+        try {
+            manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
             override fun onOpened(device: CameraDevice) {
-                cameraOpenLock.release()
                 cameraDevice = device
                 Log.i(TAG, "Camera opened: $cameraId")
-                createCaptureSession(device)
+                createCaptureSession(device, onReady, onFailure)
             }
             override fun onDisconnected(device: CameraDevice) {
-                cameraOpenLock.release()
-                isSwitchingCamera = false
-                device.close()
                 cameraDevice = null
                 Log.w(TAG, "Camera disconnected")
+                closeCallbacks[device] = {
+                    onFailure?.invoke(
+                        CameraAccessException(CameraAccessException.CAMERA_DISCONNECTED),
+                    )
+                }
+                device.close()
             }
             override fun onError(device: CameraDevice, error: Int) {
-                cameraOpenLock.release()
-                isSwitchingCamera = false
-                device.close()
                 cameraDevice = null
                 Log.e(TAG, "Camera error: $error")
+                closeCallbacks[device] = {
+                    onFailure?.invoke(CameraAccessException(error))
+                }
+                device.close()
             }
-        }, cameraHandler)
+            override fun onClosed(device: CameraDevice) {
+                cameraHandler.post {
+                    closeCallbacks.remove(device)?.invoke()
+                }
+            }
+            }, cameraHandler)
+        } catch (error: Throwable) {
+            Log.e(TAG, "Unable to open camera $cameraId", error)
+            onFailure?.invoke(error)
+        }
     }
 
-    private fun createCaptureSession(device: CameraDevice) {
+    private fun createCaptureSession(
+        device: CameraDevice,
+        onReady: (() -> Unit)?,
+        onFailure: ((Throwable) -> Unit)?,
+    ) {
         val surfaces = buildList<Surface> {
             previewSurface?.let { add(it) }
             encoderSurface?.let { add(it) }
         }
 
         if (surfaces.isEmpty()) {
-            Log.e(TAG, "No surfaces for capture session")
+            val error = IllegalStateException("No surfaces for capture session")
+            Log.e(TAG, error.message, error)
+            onFailure?.invoke(error)
             return
         }
 
         val stateCallback = object : CameraCaptureSession.StateCallback() {
             override fun onConfigured(session: CameraCaptureSession) {
+                if (isClosed || device != cameraDevice) {
+                    session.close()
+                    return
+                }
                 captureSession = session
-                isSwitchingCamera = false
-                Log.i(TAG, "Capture session configured (${surfaces.size} surfaces)")
-                startRepeatingRequest(device, session)
+                try {
+                    startRepeatingRequest(device, session)
+                    Log.i(TAG, "Capture session configured (${surfaces.size} surfaces)")
+                    onReady?.invoke()
+                } catch (error: Throwable) {
+                    Log.e(TAG, "Unable to start repeating request", error)
+                    cameraHandler.post {
+                        closeCameraDevice { onFailure?.invoke(error) }
+                    }
+                }
             }
             override fun onConfigureFailed(session: CameraCaptureSession) {
-                isSwitchingCamera = false
                 Log.e(TAG, "Capture session configuration failed")
+                captureSession = session
+                cameraHandler.post {
+                    closeCameraDevice {
+                        onFailure?.invoke(
+                            IllegalStateException("Capture session configuration failed"),
+                        )
+                    }
+                }
             }
         }
 
@@ -307,7 +364,7 @@ class Camera2Manager(
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
                 outputConfigs,
-                Executors.newSingleThreadExecutor(),
+                sessionExecutor,
                 stateCallback,
             )
             device.createCaptureSession(sessionConfig)
@@ -315,6 +372,33 @@ class Camera2Manager(
             @Suppress("DEPRECATION")
             device.createCaptureSession(surfaces, stateCallback, cameraHandler)
         }
+    }
+
+    /** Fecha a CameraDevice atual e só então executa [onClosed]. */
+    private fun closeCameraDevice(onClosed: () -> Unit) {
+        isRunning = false
+        val session = captureSession
+        val device = cameraDevice
+        captureSession = null
+        cameraDevice = null
+        captureRequest = null
+
+        try {
+            session?.stopRepeating()
+            session?.abortCaptures()
+        } catch (error: Throwable) {
+            Log.w(TAG, "Capture session was already stopping", error)
+        } finally {
+            session?.close()
+        }
+
+        if (device == null) {
+            onClosed()
+            return
+        }
+
+        closeCallbacks[device] = onClosed
+        device.close()
     }
 
     private fun startRepeatingRequest(device: CameraDevice, session: CameraCaptureSession) {

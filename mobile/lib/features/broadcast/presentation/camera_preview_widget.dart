@@ -147,24 +147,31 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
     return ValueListenableBuilder<CameraPreviewTransform>(
       valueListenable: cameraPreviewTransformNotifier,
       builder: (context, transform, _) {
-        Widget texture = SizedBox(
-          width: 1920,
-          height: 1080,
-          child: Texture(textureId: _textureId),
+        Widget orientedPreview = RotatedBox(
+          quarterTurns: (transform.rotationDegrees ~/ 90) % 4,
+          child: SizedBox(
+            width: 1920,
+            height: 1080,
+            child: Texture(
+              textureId: _textureId,
+              filterQuality: FilterQuality.none,
+            ),
+          ),
         );
+        // O espelhamento da lente frontal é aplicado depois da rotação, no
+        // eixo horizontal da tela. Aplicá-lo antes transforma mirror em flip
+        // vertical quando o sensor está a 90/270 graus.
         if (transform.frontFacing) {
-          texture = Transform.flip(
+          orientedPreview = Transform.flip(
             flipX: true,
-            child: texture,
+            child: orientedPreview,
           );
         }
         return ClipRect(
           child: FittedBox(
             fit: BoxFit.cover,
-            child: RotatedBox(
-              quarterTurns: (transform.rotationDegrees ~/ 90) % 4,
-              child: texture,
-            ),
+            clipBehavior: Clip.hardEdge,
+            child: orientedPreview,
           ),
         );
       },
