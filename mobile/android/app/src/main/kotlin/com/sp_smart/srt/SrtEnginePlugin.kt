@@ -58,12 +58,27 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
     // ── MethodCallHandler ─────────────────────────────────────
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
+            "startPreview"       -> handleStartPreview(call, result)
             "connect"            -> handleConnect(call, result)
             "disconnect"         -> handleDisconnect(result)
             "switchDestination"  -> handleSwitchDestination(call, result)
             "setTargetBitrate"   -> handleSetBitrate(call, result)
             "getTextureId"       -> result.success(publisher?.textureId ?: -1L)
             else                 -> result.notImplemented()
+        }
+    }
+
+    private fun handleStartPreview(call: MethodCall, result: Result) {
+        val width = call.argument<Int>("width") ?: 1920
+        val height = call.argument<Int>("height") ?: 1080
+        val fps = call.argument<Int>("fps") ?: 30
+        val bitrateKbps = call.argument<Int>("bitrateKbps") ?: 2000
+
+        val textureId = publisher?.startPreview(width, height, fps, bitrateKbps) ?: -1L
+        if (textureId >= 0L) {
+            result.success(textureId)
+        } else {
+            result.error("CAMERA_START_FAILED", "Failed to start camera preview", null)
         }
     }
 
@@ -125,7 +140,7 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
 
     // ── disconnect ────────────────────────────────────────────
     private fun handleDisconnect(result: Result) {
-        publisher?.stopPipeline()
+        publisher?.disconnectNetwork()
         result.success(null)
     }
 

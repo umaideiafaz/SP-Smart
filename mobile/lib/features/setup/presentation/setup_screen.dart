@@ -76,7 +76,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       data: (config) {
         _initControllers(config);
         return Scaffold(
-          appBar: AppBar(title: const Text('SP Smart — Configuração')),
+          appBar: AppBar(title: const Text('Configurações')),
           body: SafeArea(
             child: Form(
               key: _formKey,

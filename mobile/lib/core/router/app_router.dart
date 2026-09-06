@@ -16,7 +16,9 @@ abstract class Routes {
 // @riverpod
 GoRouter appRouter(Ref ref) {
   return GoRouter(
-    initialLocation: Routes.setup,
+    // Operação abre direto na câmera. Configuração é uma ferramenta de apoio,
+    // acessível pelo menu do HUD, e não a tela principal do produto.
+    initialLocation: Routes.broadcast,
     debugLogDiagnostics: true,
     routes: [
       GoRoute(

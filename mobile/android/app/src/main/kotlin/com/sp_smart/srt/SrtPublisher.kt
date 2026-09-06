@@ -50,6 +50,53 @@ class SrtPublisher(
     // Operações do Publisher
     // ─────────────────────────────────────────────────────────
 
+    /**
+     * Inicializa Camera2 + MediaCodec independentemente do socket SRT.
+     * Assim o operador sempre tem preview antes de entrar no ar, mantendo
+     * exatamente o mesmo caminho zero-copy usado durante a transmissão.
+     */
+    @Synchronized
+    fun startPreview(
+        width: Int = 1920,
+        height: Int = 1080,
+        fps: Int = 30,
+        bitrateKbps: Int = 2000
+    ): Long {
+        if (textureId >= 0L && cameraManager != null && encoder != null) {
+            return textureId
+        }
+
+        Log.i(TAG, "Starting camera preview: $width x $height @ $fps fps")
+
+        encoder = H265Encoder(width, height, fps, bitrateKbps) { data, size, pts ->
+            // O JNI descarta os pacotes enquanto não existir socket SRT ativo.
+            nativeSendPacket(data, size, pts)
+        }
+        encoder?.start()
+
+        val surface = encoder?.inputSurface
+        if (surface == null) {
+            Log.e(TAG, "Encoder failed to provide input surface")
+            stopPreview()
+            return -1L
+        }
+
+        return try {
+            cameraManager = Camera2Manager(context, textureRegistry)
+            val config = Camera2Manager.CameraConfig(
+                width = width,
+                height = height,
+                frameRate = fps,
+            )
+            textureId = cameraManager?.open(config, surface) ?: -1L
+            textureId
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start camera preview", e)
+            stopPreview()
+            -1L
+        }
+    }
+
     fun startPipeline(
         host: String, port: Int, streamKey: String, passphrase: String,
         latencyMs: Int, node: String,
@@ -66,38 +113,36 @@ class SrtPublisher(
             return false
         }
 
-        // 2. Inicia H.265 Encoder
-        encoder = H265Encoder(width, height, fps, bitrateKbps) { data, size, pts ->
-            // Callback: Envia cada pacote H.265 para a libsrt C++
-            nativeSendPacket(data, size, pts)
-        }
-        encoder?.start()
-
-        val surface = encoder?.inputSurface
-        if (surface == null) {
-            Log.e(TAG, "Encoder failed to provide input surface")
-            stopPipeline()
+        // 2. Reutiliza o preview zero-copy já aberto pela tela. Se ainda não
+        // estiver aberto, inicializa-o aqui como fallback.
+        if (startPreview(width, height, fps, bitrateKbps) < 0L) {
+            Log.e(TAG, "Failed to start camera preview")
+            nativeDisconnect()
             return false
         }
 
-        // 3. Inicia Camera2 apontando para a Surface do Encoder (e Flutter Texture)
-        cameraManager = Camera2Manager(context, textureRegistry)
-        val config = Camera2Manager.CameraConfig(width = width, height = height, frameRate = fps)
-        
-        textureId = cameraManager?.open(config, surface) ?: -1L
-
-        return textureId != -1L
+        return true
     }
 
-    fun stopPipeline() {
-        Log.i(TAG, "Stopping pipeline")
+    /** Encerra somente a rede; o preview permanece disponível ao operador. */
+    fun disconnectNetwork() {
+        nativeDisconnect()
+    }
+
+    @Synchronized
+    private fun stopPreview() {
         cameraManager?.close()
         cameraManager = null
 
         encoder?.stop()
         encoder = null
+        textureId = -1L
+    }
 
+    fun stopPipeline() {
+        Log.i(TAG, "Stopping pipeline")
         nativeDisconnect()
+        stopPreview()
     }
 
     // ── Callbacks Nativos ────────────────────────────────────

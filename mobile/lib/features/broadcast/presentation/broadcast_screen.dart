@@ -12,19 +12,55 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:sp_smart/core/config/app_config.dart';
 import 'package:sp_smart/core/network/protocol.dart';
+import 'package:sp_smart/core/router/app_router.dart';
 import 'package:sp_smart/core/srt/srt_engine.dart';
 import 'package:sp_smart/core/network/signaling_service.dart';
 import '../services/ifb_service.dart';
 import 'camera_preview_widget.dart';
 import 'broadcast_providers.dart';
 
-class BroadcastScreen extends ConsumerWidget {
+class BroadcastScreen extends ConsumerStatefulWidget {
   const BroadcastScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BroadcastScreen> createState() => _BroadcastScreenState();
+}
+
+class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_connectSavedConfiguration);
+  }
+
+  Future<void> _connectSavedConfiguration() async {
+    final config = await ref.read(appConfigNotifierProvider.future);
+    if (config.authSecret.length < 10 || config.primary.host.isEmpty) return;
+
+    final signaling = ref.read(signalingServiceProvider);
+    if (signaling.state != SignalingState.disconnected &&
+        signaling.state != SignalingState.error) {
+      return;
+    }
+
+    try {
+      await signaling.connect(
+        endpoints: config.endpoints,
+        reporterId: config.reporterId,
+        displayName: config.displayName,
+        authSecret: config.authSecret,
+        srtStreamKey: config.srtStreamKey,
+      );
+    } catch (error) {
+      debugPrint('[BroadcastScreen] Signaling startup failed: $error');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final tallyState = ref.watch(tallyStateProvider).value ?? TallyState.idle;
     final isPgm = tallyState == TallyState.pgm;
     final config = ref.watch(appConfigNotifierProvider).valueOrNull;
@@ -81,7 +117,7 @@ class BroadcastScreen extends ConsumerWidget {
             top: 0,
             left: 0,
             right: 0,
-            height: 120,
+            height: 96,
             child: IgnorePointer(
               child: Container(
                 decoration: const BoxDecoration(
@@ -95,47 +131,55 @@ class BroadcastScreen extends ConsumerWidget {
             ),
           ),
 
-          // ── 4. HUD de Telemetria (Topo) ─────────────────────
+          // ── 4. Interface operacional em paisagem ────────────
           SafeArea(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _SRTStatusHUD(),
-                    _SystemHUD(),
-                  ],
+            child: Stack(
+              children: [
+                Positioned(
+                  top: 8,
+                  left: 84,
+                  right: 100,
+                  child: Row(
+                    children: [
+                      _SRTStatusHUD(),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          config?.displayName.isNotEmpty == true
+                              ? config!.displayName
+                              : 'SP SMART',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const _VideoFormatHUD(),
+                      const SizedBox(width: 16),
+                      _SystemHUD(),
+                    ],
+                  ),
                 ),
-              ),
-            ),
-          ),
-
-          // ── 5. Controles Inferiores (IFB + GO LIVE) ─────────
-          SafeArea(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: Padding(
-                padding:
-                    const EdgeInsets.only(bottom: 24.0, left: 24, right: 24),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    // Botão IFB (Esquerda)
-                    _IFBToggleButton(reporterId: config?.reporterId ?? ''),
-
-                    // GO LIVE (Centro)
-                    const _GoLiveButton(),
-
-                    // Espaçador para simetria (Direita)
-                    const SizedBox(width: 56),
-                  ],
+                Positioned(
+                  top: 76,
+                  bottom: 12,
+                  left: 8,
+                  width: 68,
+                  child: _LeftAudioRail(
+                    reporterId: config?.reporterId ?? '',
+                  ),
                 ),
-              ),
+                const Positioned(
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  width: 88,
+                  child: _ControlRail(),
+                ),
+              ],
             ),
           ),
         ],
@@ -279,6 +323,94 @@ class _SystemHUD extends ConsumerWidget {
       ],
     );
   }
+}
+
+class _VideoFormatHUD extends StatelessWidget {
+  const _VideoFormatHUD();
+
+  @override
+  Widget build(BuildContext context) => const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.videocam_outlined, color: Colors.white70, size: 22),
+          SizedBox(width: 6),
+          Text(
+            'HEVC\n1080p30',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+              height: 1.1,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      );
+}
+
+class _LeftAudioRail extends StatelessWidget {
+  const _LeftAudioRail({required this.reporterId});
+  final String reporterId;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Colors.black.withAlpha(150),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+        child: Column(
+          children: [
+            _IFBToggleButton(reporterId: reporterId),
+            const Spacer(),
+            const Icon(Icons.graphic_eq, color: Color(0xFF9ADB00), size: 26),
+            const SizedBox(height: 4),
+            const Text(
+              'IFB',
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'L   R',
+              style: TextStyle(
+                color: Colors.white,
+                fontFamily: 'monospace',
+                fontSize: 14,
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _ControlRail extends StatelessWidget {
+  const _ControlRail();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        color: Colors.black.withAlpha(190),
+        child: Column(
+          children: [
+            const SizedBox(height: 12),
+            const Icon(
+              Icons.broadcast_on_personal,
+              color: Colors.white,
+              size: 34,
+            ),
+            const Spacer(),
+            const _GoLiveButton(),
+            const Spacer(),
+            IconButton(
+              tooltip: 'Configurações',
+              iconSize: 36,
+              color: Colors.white,
+              onPressed: () => context.push(Routes.setup),
+              icon: const Icon(Icons.settings),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────

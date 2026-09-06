@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class CameraPreviewWidget extends StatefulWidget {
   const CameraPreviewWidget({super.key});
@@ -15,30 +16,79 @@ class CameraPreviewWidget extends StatefulWidget {
   State<CameraPreviewWidget> createState() => _CameraPreviewWidgetState();
 }
 
-class _CameraPreviewWidgetState extends State<CameraPreviewWidget> {
+class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
+    with WidgetsBindingObserver {
   static const _channel = MethodChannel('sp.smart/srt');
   int _textureId = -1;
   bool _isLoading = true;
+  bool _isInitializing = false;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _fetchTextureId();
+    WidgetsBinding.instance.addObserver(this);
+    _initializePreview();
   }
 
-  Future<void> _fetchTextureId() async {
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _textureId < 0) {
+      _initializePreview();
+    }
+  }
+
+  Future<void> _initializePreview() async {
+    if (_isInitializing || _textureId >= 0) return;
+    _isInitializing = true;
+
     try {
-      // O SrtEnginePlugin.kt (Android) expõe getTextureId()
-      final id = await _channel.invokeMethod<int>('getTextureId');
+      final cameraStatus = await Permission.camera.request();
+      // O microfone é necessário para o IFB, mas sua recusa não deve impedir
+      // que o operador veja a câmera local.
+      await Permission.microphone.request();
+
+      if (!cameraStatus.isGranted) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = cameraStatus.isPermanentlyDenied
+                ? 'Permissão da câmera bloqueada nas configurações'
+                : 'Permissão da câmera negada';
+          });
+        }
+        return;
+      }
+
+      final id = await _channel.invokeMethod<int>('startPreview', {
+        'width': 1920,
+        'height': 1080,
+        'fps': 30,
+        'bitrateKbps': 2000,
+      });
       if (mounted && id != null) {
         setState(() {
           _textureId = id;
           _isLoading = false;
+          _errorMessage = null;
         });
       }
     } on PlatformException catch (e) {
-      debugPrint('[CameraPreviewWidget] Error fetching texture: $e');
-      if (mounted) setState(() => _isLoading = false);
+      debugPrint('[CameraPreviewWidget] Error starting preview: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Falha ao iniciar a câmera';
+        });
+      }
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -51,27 +101,30 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget> {
     }
 
     if (_textureId < 0) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.videocam_off, size: 48, color: Colors.white24),
-            SizedBox(height: 8),
+            const Icon(Icons.videocam_off, size: 48, color: Colors.white24),
+            const SizedBox(height: 8),
             Text(
-              'Câmera não iniciada',
-              style: TextStyle(color: Colors.white38),
+              _errorMessage ?? 'Câmera não iniciada',
+              style: const TextStyle(color: Colors.white38),
             ),
           ],
         ),
       );
     }
 
-    // Aspect ratio 16:9 padrão do broadcast
-    return AspectRatio(
-      aspectRatio: 9.0 / 16.0, // Retrato (Mobile)
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Texture(textureId: _textureId),
+    // Preview 16:9 preenchendo a operação em paisagem, com crop central.
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: 1920,
+          height: 1080,
+          child: Texture(textureId: _textureId),
+        ),
       ),
     );
   }
