@@ -62,9 +62,11 @@ class SrtPublisher(
         width: Int = 1920,
         height: Int = 1080,
         fps: Int = 30,
-        bitrateKbps: Int = 2000
+        bitrateKbps: Int = 2000,
+        onComplete: ((Result<Long>) -> Unit)? = null,
     ): Long {
         if (textureId >= 0L && cameraManager != null && encoder != null) {
+            onComplete?.invoke(Result.success(textureId))
             return textureId
         }
 
@@ -90,7 +92,18 @@ class SrtPublisher(
                 height = height,
                 frameRate = fps,
             )
-            textureId = cameraManager?.open(config, surface) ?: -1L
+            textureId = cameraManager?.open(
+                config,
+                surface,
+                onReady = {
+                    onComplete?.invoke(Result.success(textureId))
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Camera preview failed asynchronously", error)
+                    stopPreview()
+                    onComplete?.invoke(Result.failure(error))
+                },
+            ) ?: -1L
             if (textureId >= 0L) {
                 audioInput = AudioInputManager(
                     context,
@@ -103,6 +116,7 @@ class SrtPublisher(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start camera preview", e)
             stopPreview()
+            onComplete?.invoke(Result.failure(e))
             -1L
         }
     }

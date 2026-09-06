@@ -45,6 +45,7 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
   int _textureId = -1;
   bool _isLoading = true;
   bool _isInitializing = false;
+  int _foregroundRetryCount = 0;
   String? _errorMessage;
 
   @override
@@ -100,6 +101,7 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
       );
       updateCameraPreviewTransform(info);
       if (mounted && id != null) {
+        _foregroundRetryCount = 0;
         setState(() {
           _textureId = id;
           _isLoading = false;
@@ -113,6 +115,15 @@ class _CameraPreviewWidgetState extends State<CameraPreviewWidget>
           _isLoading = false;
           _errorMessage = 'Falha ao iniciar a câmera';
         });
+        if (WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed &&
+            _foregroundRetryCount < 3) {
+          _foregroundRetryCount++;
+          Future<void>.delayed(
+            Duration(milliseconds: 300 * _foregroundRetryCount),
+            _initializePreview,
+          );
+        }
       }
     } finally {
       _isInitializing = false;

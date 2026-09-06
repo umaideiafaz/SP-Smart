@@ -118,11 +118,24 @@ class SrtEnginePlugin : FlutterPlugin, MethodCallHandler, EventChannel.StreamHan
         val fps = call.argument<Int>("fps") ?: 30
         val bitrateKbps = call.argument<Int>("bitrateKbps") ?: 2000
 
-        val textureId = publisher?.startPreview(width, height, fps, bitrateKbps) ?: -1L
-        if (textureId >= 0L) {
-            result.success(textureId)
-        } else {
-            result.error("CAMERA_START_FAILED", "Failed to start camera preview", null)
+        val activePublisher = publisher
+        if (activePublisher == null) {
+            result.error("CAMERA_START_FAILED", "Camera publisher unavailable", null)
+            return
+        }
+        activePublisher.startPreview(width, height, fps, bitrateKbps) { outcome ->
+            mainHandler.post {
+                outcome.fold(
+                    onSuccess = result::success,
+                    onFailure = { error ->
+                        result.error(
+                            "CAMERA_START_FAILED",
+                            error.message ?: "Failed to start camera preview",
+                            null,
+                        )
+                    },
+                )
+            }
         }
     }
 

@@ -95,7 +95,12 @@ class Camera2Manager(
      *
      * @return flutterTextureId para o widget Texture() no Flutter
      */
-    fun open(newConfig: CameraConfig, encoderSurface: Surface): Long {
+    fun open(
+        newConfig: CameraConfig,
+        encoderSurface: Surface,
+        onReady: (() -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null,
+    ): Long {
         config = newConfig
         this.encoderSurface = encoderSurface
 
@@ -106,7 +111,7 @@ class Camera2Manager(
         st.setDefaultBufferSize(config.width, config.height)
         previewSurface = Surface(st)
 
-        openCameraInternal()
+        openCameraInternal(onReady, onFailure)
         return entry.id()
     }
 
